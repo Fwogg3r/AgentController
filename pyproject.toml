@@ -1,0 +1,22 @@
+[project]
+name = "agentcontroller"
+version = "0.1.0"
+description = "Launch, watch and steer budget-capped Claude Agent SDK agents from a localhost dashboard"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = ["claude-agent-sdk>=0.2.174"]
+
+[project.scripts]
+agentctl = "agentcontroller.runner:main"
+agentdash = "agentcontroller.dash:main"
+agentwatch = "agentcontroller.watch:main"
+agentwait = "agentcontroller.wait_primary:main"
+agentusage = "agentcontroller.usage:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentcontroller"]

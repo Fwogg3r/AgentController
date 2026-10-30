@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents</title>
+<style>
+:root {
+  --bg:#F5F0E8; --card:#FFFDF9; --ink:#2B2824; --muted:#8A8378; --line:#E6DFD2; --accent:#D97757; --accent-d:#C4623F;
+  --bubble:#FFFFFF; --user:#FBE3D8; --tool:#EFE8DB; --ok:#5E8C61; --bad:#B94A48; --warn:#C48A1E;
+  --shadow:0 1px 2px rgba(60,40,20,.08),0 4px 14px rgba(60,40,20,.06);
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg:#1F1E1D; --card:#2A2927; --ink:#EDE8DF; --muted:#9A948A; --line:#3A3835; --bubble:#2F2D2B; --user:#4A2E23;
+  --tool:#2A2927; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.25);
+} }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column;
+  font:14px/1.5 "Styrene A","Tiempos Text",ui-serif,Georgia,"Segoe UI",system-ui,sans-serif; }
+code,pre,.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-size:12.5px; }
+header { display:flex; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+header h1 { font-size:17px; margin:0; font-weight:600; letter-spacing:.2px; }
+.spend { display:flex; gap:14px; align-items:center; flex:1; min-width:260px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+.bar { width:140px; height:8px; border-radius:6px; background:var(--line); overflow:hidden; }
+.bar i { display:block; height:100%; background:var(--accent); width:0; transition:width .4s; }
+.bar.hot i { background:var(--bad); }
+button { font:inherit; font-size:13px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:10px;
+  padding:5px 11px; cursor:pointer; box-shadow:var(--shadow); }
+button:hover:not(:disabled) { border-color:var(--accent); }
+button:disabled { opacity:.45; cursor:default; }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button.primary.armed { background:var(--accent-d); outline:2px solid var(--accent); }
+button.danger:hover:not(:disabled) { border-color:var(--bad); color:var(--bad); }
+main { flex:1; display:flex; min-height:0; }
+#runs { width:250px; flex:none; overflow:auto; padding:10px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+.run { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:9px 10px; cursor:pointer; box-shadow:var(--shadow);
+  display:grid; grid-template-columns:34px 1fr; gap:8px; align-items:center; }
+.run.sel { border-color:var(--accent); }
+.run .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.run .meta { color:var(--muted); font-size:12px; }
+.pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#fff; }
+.pill.running { background:var(--ok); } .pill.finished { background:var(--muted); } .pill.stalled { background:var(--warn); }
+#pane { flex:1; display:flex; flex-direction:column; min-width:0; }
+#runhead { padding:8px 14px; border-bottom:1px solid var(--line); font-size:12.5px; color:var(--muted); }
+#runhead b { color:var(--ink); }
+#runhead .commits { margin-top:2px; white-space:pre-wrap; }
+#stream { flex:1; overflow:auto; padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
+.bubble { background:var(--bubble); border:1px solid var(--line); border-radius:14px 14px 14px 4px; padding:8px 12px; max-width:92%;
+  white-space:pre-wrap; word-break:break-word; box-shadow:var(--shadow); cursor:pointer; }
+.bubble.sel { outline:2px solid var(--accent); }
+.bubble.user { align-self:flex-end; background:var(--user); border-radius:14px 14px 4px 14px; border-color:var(--accent); }
+.bubble .ts { display:block; color:var(--muted); font-size:11px; }
+details.tool { background:var(--tool); border-radius:10px; padding:3px 10px; font-size:12.5px; border:1px solid var(--line); }
+details.tool summary { cursor:pointer; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+details.tool summary::before { content:"> "; color:var(--accent); }
+details[open].tool summary::before { content:"v "; }
+details.tool .res { margin:4px 0; white-space:pre-wrap; color:var(--muted); }
+details.tool.err summary { color:var(--bad); }
+.sys { text-align:center; color:var(--muted); font-size:12px; }
+#composer { border-top:1px solid var(--line); padding:10px 14px; display:flex; flex-direction:column; gap:6px; }
+textarea { width:100%; resize:vertical; min-height:54px; max-height:200px; font:inherit; color:var(--ink); background:var(--card);
+  border:1px solid var(--line); border-radius:12px; padding:8px 10px; }
+textarea:focus { outline:2px solid var(--accent); border-color:var(--accent); }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.hint { font-size:12px; color:var(--muted); }
+#primarybox { padding:8px 14px; border-top:1px dashed var(--line); }
+#primarybox summary { cursor:pointer; color:var(--muted); font-size:12.5px; }
+dialog { background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
+  padding:16px 18px; width:min(560px,94vw); }
+dialog::backdrop { background:rgba(0,0,0,.35); }
+dialog h2 { margin:0 0 10px; font-size:16px; }
+dialog label { display:block; font-size:12.5px; color:var(--muted); margin:8px 0 2px; }
+dialog input, dialog select { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line);
+  border-radius:10px; padding:6px 9px; }
+dialog .two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+dialog .err { color:var(--bad); font-size:12.5px; min-height:1.2em; margin-top:8px; white-space:pre-wrap; }
+dialog .msg { white-space:pre-wrap; margin:6px 0; }
+.actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.empty { margin:auto; text-align:center; color:var(--muted); }
+/* Clawd */
+.clawd { display:block; }
+.clawd .eye { fill:#2B1A12; } .clawd .zz, .clawd .bang { display:none; font:bold 5px monospace; }
+.clawd.running { animation:bob 1.1s ease-in-out infinite; }
+.clawd.running .leg:nth-of-type(odd) { animation:step 1.1s steps(2) infinite; }
+.clawd.finished .eye { display:none; } .clawd.finished .closed { display:block; } .clawd .closed { display:none; }
+.clawd.finished .zz { display:block; fill:var(--muted); animation:zz 2.4s ease-in-out infinite; }
+.clawd.stalled .bang { display:block; fill:var(--bad); }
+.clawd.stalled { filter:saturate(.5); }
+@keyframes bob { 50% { transform:translateY(-2px); } }
+@keyframes step { 50% { transform:translateY(-1px); } }
+@keyframes zz { 50% { opacity:.3; transform:translateY(-1px); } }
+@media (max-width:640px) {
+  main { flex-direction:column; }
+  #runs { width:auto; flex-direction:row; border-right:0; border-bottom:1px solid var(--line); max-height:none; }
+  .run { min-width:190px; }
+  .bar { width:90px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div id="logo"></div>
+  <h1 id="title">Agents</h1>
+  <button class="primary" id="newbtn">+ New agent</button>
+  <div class="spend">
+    <span title="all of api_usage.jsonl vs the cap">total <b id="sp-total">-</b> / <span id="sp-cap">-</span></span>
+    <span class="bar" id="sp-bar"><i></i></span>
+    <span title="since the session start">session <b id="sp-sess">-</b></span>
+    <button id="billed" title="Calls tools/api_usage.py --json (lags by hours)">actual billed</button>
+    <span id="billed-out" class="mono"></span>
+  </div>
+</header>
+<main>
+  <aside id="runs"></aside>
+  <section id="pane">
+    <div id="runhead"></div>
+    <div id="stream"><div class="empty">Select a run.</div></div>
+    <div id="composer">
+      <textarea id="text" placeholder="Message for the selected run (or text to forward). Click a bubble to select it for forwarding."></textarea>
+      <div class="row">
+        <button class="primary" id="send">Send to agent</button>
+        <button class="danger" id="stop">Stop after this turn</button>
+        <button id="fwd">Forward to primary</button>
+        <span class="hint" id="hint"></span>
+      </div>
+    </div>
+    <details id="primarybox">
+      <summary>Message primary session (the coordinator)</summary>
+      <textarea id="ptext" placeholder="Goes to primary_inbox.jsonl; the coordinator is woken by tools/wait_primary.py"></textarea>
+      <div class="row" style="margin-top:6px"><button class="primary" id="psend">Send to primary</button><span class="hint" id="phint"></span></div>
+    </details>
+  </section>
+</main>
+<dialog id="newdlg">
+  <h2>New agent</h2>
+  <div class="hint" id="headroom"></div>
+  <label>Name (branch + worktree; a-z, 0-9, -)</label><input id="n-name" placeholder="my-task" autocomplete="off">
+  <div class="two">
+    <div><label>Base branch</label><select id="n-base"></select></div>
+    <div><label>Model</label><select id="n-model"></select></div>
+  </div>
+  <div class="hint" id="n-modelnote"></div>
+  <div class="two">
+    <div><label>Budget (USD)</label><input id="n-budget" type="number" min="0.01" step="0.05" value="1"></div>
+    <div><label>Max turns</label><input id="n-turns" type="number" min="1" step="1"></div>
+  </div>
+  <label>Brief file (briefs/, optional: overrides the text below)</label><select id="n-bfile"></select>
+  <label>Brief text (saved to briefs/&lt;name&gt;.md)</label><textarea id="n-btext" placeholder="What should the agent do?"></textarea>
+  <label>Resume session id (optional)</label><input id="n-resume" autocomplete="off">
+  <div class="err" id="n-err"></div>
+  <div class="row" style="margin-top:8px"><button class="primary" id="n-go">Launch</button><button id="n-cancel">Cancel</button></div>
+</dialog>
+<dialog id="confdlg">
+  <h2 id="c-title"></h2><div class="msg" id="c-msg"></div>
+  <div class="row"><button class="primary" id="c-ok">Confirm</button><button id="c-cancel">Cancel</button></div>
+</dialog>
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const usd = n => n == null ? "-" : "$" + Number(n).toFixed(2);
+
+// Clawd: chunky orange body, two dark square eyes, little legs. 11x8 pixel grid.
+function clawd(state, px) {
+  const r = (x, y, w, h, c) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" ${c || ""}/>`;
+  const o = 'fill="#D97757"';
+  const svg = `<svg class="clawd ${state}" viewBox="0 -2 11 10" width="${px}" height="${px * 10 / 11}" shape-rendering="crispEdges">
+    ${r(1,1,9,4,o)}${r(0,3,1,2,o)}${r(10,3,1,2,o)}
+    ${r(2,5,1,2,o).replace('<rect','<rect class="leg"')}${r(4,5,1,2,o).replace('<rect','<rect class="leg"')}
+    ${r(6,5,1,2,o).replace('<rect','<rect class="leg"')}${r(8,5,1,2,o).replace('<rect','<rect class="leg"')}
+    <g class="eye">${r(3,2,1,2,'class="eye"')}${r(7,2,1,2,'class="eye"')}</g>
+    <g class="closed">${r(3,3,1,.5,'class="eye" style="display:block"')}${r(7,3,1,.5,'class="eye" style="display:block"')}</g>
+    <text class="zz" x="9" y="0">z</text><text class="bang" x="9.2" y="0.5">!</text></svg>`;
+  return svg;
+}
+$("#logo").innerHTML = clawd("running", 40);
+
+let runs = [], current = null, es = null, selBubble = null, lastTool = null, stick = true;
+
+async function loadRuns() {
+  try { runs = await (await fetch("/api/runs")).json(); } catch { return; }
+  const box = $("#runs"); box.textContent = "";
+  for (const r of runs) {
+    const d = el("div", "run" + (r.name === current ? " sel" : ""));
+    const g = el("div"); g.innerHTML = clawd(r.status, 32);
+    const t = el("div");
+    t.append(el("div", "nm", r.name));
+    const p = el("span", "pill " + r.status, r.status);
+    const m = el("div", "meta", `${(r.model || "?").replace("claude-", "")} · ${usd(r.cost)} · ${r.turns} turns`);
+    t.append(p, m);
+    d.append(g, t); d.onclick = () => select(r.name);
+    box.append(d);
+  }
+  if (!runs.length) box.append(el("div", "hint", "No runs yet."));
+  const r = runs.find(x => x.name === current);
+  if (r) {
+    const h = $("#runhead"); h.textContent = "";
+    const b = el("div"); b.innerHTML = "<b></b> "; b.firstChild.textContent = r.name;
+    b.append(`${r.branch || "-"} · ${r.worktree ? "uncommitted: " + (r.dirty ?? "?") : "no worktree"}${r.legacy ? " · legacy log" : ""}`);
+    h.append(b, el("div", "commits mono", (r.commits || []).join("\n")));
+    const live = r.status === "running";
+    const act = el("div", "actions");
+    const btn = (label, cls, fn, off) => { const x = el("button", cls, label); x.disabled = !!off; x.onclick = fn; act.append(x); };
+    btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
+      "Terminates the whole process tree immediately. Use only if a graceful stop did not work. The spend so far is logged.",
+      () => act2("/api/kill", r.name)), !r.pid_alive);
+    btn("Remove from list", "", () => confirmThen("Archive " + r.name + "?",
+      "Moves its logs to agent_runs/archive/. The worktree and branch stay.", () => act2("/api/archive", r.name)), live);
+    btn("Delete worktree", "danger", () => deleteWorktree(r.name), live || !r.worktree);
+    h.append(act);
+    $("#send").disabled = $("#stop").disabled = !live;
+  }
+}
+
+function select(name) {
+  current = name; selBubble = null; lastTool = null;
+  if (es) es.close();
+  $("#stream").textContent = "";
+  es = new EventSource("/api/stream?run=" + encodeURIComponent(name));
+  es.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch {} };
+  loadRuns();
+}
+
+function add(node) {
+  const s = $("#stream");
+  s.append(node);
+  if (stick) s.scrollTop = s.scrollHeight;
+}
+function bubble(cls, text, ts) {
+  const b = el("div", "bubble " + cls);
+  if (ts) b.append(el("span", "ts", ts.replace("T", " ")));
+  b.append(document.createTextNode(text));
+  b.dataset.text = text;
+  b.onclick = () => { if (selBubble) selBubble.classList.remove("sel"); selBubble = selBubble === b ? null : b; if (selBubble) b.classList.add("sel"); updateHint(); };
+  return b;
+}
+function render(e) {
+  switch (e.kind) {
+    case "text": add(bubble("", e.text, e.ts)); break;
+    case "user": add(bubble("user", e.text, e.ts)); break;
+    case "tool": {
+      const d = el("details", "tool"); d.append(el("summary", "mono", `${e.name}: ${e.arg || ""}`));
+      lastTool = d; add(d); break;
+    }
+    case "tool_result":
+      if (lastTool) { lastTool.append(el("div", "res mono", e.text || "(empty)")); if (!e.ok) lastTool.classList.add("err"); lastTool = null; }
+      break;
+    case "start": add(el("div", "sys", `started · ${(e.model || "").replace("claude-", "")} · budget ${usd(e.budget)} · ${e.brief || ""}`)); break;
+    case "result": add(el("div", "sys", `turn done · ${usd(e.cost)} · ${e.turns} turns · ${e.subtype}`)); loadRuns(); break;
+    case "end": add(el("div", "sys", "run ended")); loadRuns(); break;
+  }
+}
+$("#stream").addEventListener("scroll", () => { const s = $("#stream"); stick = s.scrollHeight - s.scrollTop - s.clientHeight < 40; });
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+const msgText = () => $("#text").value.trim();
+function updateHint() { $("#hint").textContent = selBubble && !msgText() ? "Forward uses the selected bubble." : ""; }
+$("#text").oninput = updateHint;
+
+let armTimer = null;
+$("#send").onclick = async () => {
+  const b = $("#send"), t = msgText();
+  if (!current || !t) return;
+  if (!b.classList.contains("armed")) {
+    b.classList.add("armed"); b.textContent = "Confirm send";
+    $("#hint").textContent = "Delivered at the agent's next turn. Click again to send.";
+    armTimer = setTimeout(disarm, 5000); return;
+  }
+  disarm();
+  const r = await post("/api/inbox?run=" + encodeURIComponent(current), { text: t });
+  $("#hint").textContent = r.ok ? "Queued: delivered at next turn." : "Failed: " + r.error;
+  if (r.ok) $("#text").value = "";
+};
+function disarm() { clearTimeout(armTimer); const b = $("#send"); b.classList.remove("armed"); b.textContent = "Send to agent"; }
+$("#stop").onclick = async () => {
+  if (!current || !confirm("Stop " + current + " after its current turn?")) return;
+  const r = await post("/api/inbox?run=" + encodeURIComponent(current), { control: "stop" });
+  $("#hint").textContent = r.ok ? "Stop requested: ends after this turn." : "Failed: " + r.error;
+};
+$("#fwd").onclick = async () => {
+  const t = msgText() || (selBubble && selBubble.dataset.text);
+  if (!t) return;
+  const r = await post("/api/primary", { run: current, text: t });
+  $("#hint").textContent = r.ok ? "Forwarded to primary session." : "Failed: " + r.error;
+  if (r.ok && msgText()) $("#text").value = "";
+};
+$("#psend").onclick = async () => {
+  const t = $("#ptext").value.trim(); if (!t) return;
+  const r = await post("/api/primary", { text: t });
+  $("#phint").textContent = r.ok ? "Sent." : "Failed: " + r.error;
+  if (r.ok) $("#ptext").value = "";
+};
+
+async function loadSpend() {
+  try {
+    const s = await (await fetch("/api/spend")).json();
+    $("#sp-total").textContent = usd(s.total);
+    $("#sp-cap").textContent = s.cap == null ? "no cap" : usd(s.cap);
+    $("#sp-sess").textContent = usd(s.session);
+    const pct = s.cap ? Math.min(100, 100 * s.total / s.cap) : 0;
+    $("#sp-bar i").style.width = pct + "%"; $("#sp-bar").classList.toggle("hot", pct > 85);
+  } catch {}
+}
+$("#billed").onclick = async () => {
+  const o = $("#billed-out"); o.textContent = "asking..."; $("#billed").disabled = true;
+  try { const r = await (await fetch("/api/billed")).json(); o.textContent = r.output.slice(0, 160); o.title = r.output; }
+  catch (e) { o.textContent = String(e); }
+  $("#billed").disabled = false;
+};
+
+// ---- confirm dialog, launch form, worktree delete ----
+function confirmThen(title, msg, fn, okLabel) {
+  $("#c-title").textContent = title; $("#c-msg").textContent = msg; $("#c-ok").textContent = okLabel || "Confirm";
+  $("#c-ok").onclick = async () => { $("#confdlg").close(); await fn(); };
+  $("#c-cancel").onclick = () => $("#confdlg").close();
+  $("#confdlg").showModal();
+}
+async function act2(url, run, extra) {
+  const r = await post(url + "?run=" + encodeURIComponent(run), extra || {});
+  $("#hint").textContent = r.ok ? "Done." : "Failed: " + r.error;
+  if (!r.ok) alert(r.error);
+  await loadRuns(); await loadSpend();
+  return r;
+}
+async function deleteWorktree(name) {
+  const st = await (await fetch("/api/worktree?run=" + encodeURIComponent(name))).json();
+  if (!st.ok) return alert(st.error);
+  if (st.merged && !st.dirty) {
+    return confirmThen("Delete worktree of " + name + "?", `Branch ${st.branch} is merged into ${st.base} and clean.\nRuns git worktree remove + branch -d.`,
+      () => act2("/api/worktree_delete", name, {}));
+  }
+  confirmThen("Discard unmerged work of " + name + "?",
+    `Branch ${st.branch} is NOT merged into ${st.base}.\nUncommitted files: ${st.dirty}\nUnmerged commits:\n${st.unmerged.join("\n") || "(none)"}\n\nThis permanently deletes the worktree and branch.`,
+    () => act2("/api/worktree_delete", name, { discard: true }), "Discard unmerged work");
+}
+let cfgCache = null;
+async function openNew() {
+  cfgCache = await (await fetch("/api/config")).json();
+  const c = cfgCache, fill = (sel, items, def) => { sel.textContent = ""; items.forEach(i => { const o = el("option", "", i); o.value = i; sel.append(o); }); if (def) sel.value = def; };
+  fill($("#n-base"), c.branches, c.default_base);
+  fill($("#n-model"), Object.keys(c.models), c.default_model);
+  const bf = $("#n-bfile"); bf.textContent = ""; const none = el("option", "", "(none: use the text below)"); none.value = ""; bf.append(none);
+  c.briefs.forEach(b => { const o = el("option", "", b); o.value = b; bf.append(o); });
+  $("#n-turns").value = c.max_turns; $("#n-err").textContent = "";
+  $("#headroom").textContent = c.cap == null ? "No cap configured." :
+    `Headroom ${usd(c.headroom)} = cap ${usd(c.cap)} - logged ${usd(c.logged)} - active budgets ${usd(c.reserved)}`;
+  modelNote(); $("#newdlg").showModal();
+}
+function modelNote() { const m = cfgCache.models[$("#n-model").value]; $("#n-modelnote").textContent = m ? `${m.id}: ${m.note || ""}` : ""; }
+$("#n-model").onchange = modelNote;
+$("#newbtn").onclick = openNew;
+$("#n-cancel").onclick = () => $("#newdlg").close();
+$("#n-go").onclick = async () => {
+  const body = { name: $("#n-name").value.trim(), base: $("#n-base").value, model: $("#n-model").value,
+    budget: $("#n-budget").value, max_turns: $("#n-turns").value, brief_file: $("#n-bfile").value,
+    brief_text: $("#n-btext").value, resume: $("#n-resume").value.trim() };
+  const r = await post("/api/launch", body);
+  if (!r.ok) { $("#n-err").textContent = r.error; return; }
+  $("#newdlg").close(); await loadRuns(); select(body.name); loadSpend();
+};
+fetch("/api/config").then(r => r.json()).then(c => { $("#title").textContent = c.project + " agents"; document.title = c.project + " agents"; });
+
+loadRuns().then(() => { if (runs.length && !current) select(runs[0].name); });
+loadSpend();
+setInterval(loadRuns, 4000); setInterval(loadSpend, 8000);
+</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Copy to your project root as agentcontroller.toml and add `.agentcontroller/` to its .gitignore.
+# Every key is optional; the values shown are the defaults unless noted.
+
+[paths]
+secrets = ".agentcontroller"          # gitignored; holds the key, budget, usage log, run logs
+key_file = "api.key"                  # relative to `secrets` unless absolute: the Anthropic API key
+# admin_key_file = "admin.key"        # optional: Admin API key for the "actual billed" button
+worktrees = ".claude/worktrees"       # each agent gets <worktrees>/<name> on branch <name>
+# runs = "<secrets>/agent_runs"       # event logs, inboxes, pid files, archive/
+briefs = "briefs"                     # briefs/<name>.md written by the dashboard's New agent form
+# usage_log = "api_usage.jsonl"       # relative to `secrets`
+
+[budget]
+cap = 25.0                            # hard cap in USD across all logged runs; omit for none
+# cap_file = "budget.txt"             # alternatively a file under `secrets` holding the number
+
+[agent]
+default_model = "sonnet"
+default_base = "main"
+max_turns = 250
+# Extra deny regexes for the agent's shell (matched case-insensitively). Use TOML single quotes.
+deny = ['\bdocker\s+push\b']
+# Extra PATH entries for the agent's shell (for example the Rust toolchain).
+path = ["~/.cargo/bin"]
+# Appended to the system prompt: your project's rules.
+rules = """You are a headless engineering agent on this project, billed to an API budget.
+Read CLAUDE.md first. Work only inside this worktree; commit in logical commits; never push.
+Finish with a concise report: what you built, test results, risks, next steps."""
+
+[dash]
+port = 8765
+
+# Override or add models (alias -> id, note shown in the New agent form).
+# [models.haiku]
+# id = "claude-haiku-5-5"
+# note = "cheapest"
