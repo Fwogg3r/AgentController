@@ -34,12 +34,24 @@ those rules and in the project's own `CLAUDE.md`; nothing project-specific is in
 
 ## Dashboard
 
-A Claude-themed page (warm cream or dark, terracotta accents, rounded cards) that works in a narrow split-screen window.
-"Clawd", the orange pixel-art critter, sits in the header and beside every run: bobbing while the agent runs, asleep
-("zz") when finished, with a "!" when the run has stalled.
+A page in Claude Code's terminal look (dark, monospace, terracotta accents) that works in a narrow split-screen window.
+"Clawd", the orange pixel-art critter, sits in the header and beside every run: bobbing while the agent works, dozing
+while it waits, asleep ("zz") when finished, with a "!" when it crashed.
 
-- **Runs list** with status, model, cost, turns, branch, last 3 commits, uncommitted count. **Live stream** of the selected run:
-  assistant text as chat bubbles, tool calls as collapsible `> Bash: cargo test` rows with the result, your interjections highlighted.
+- **Run states** (`state` in `/api/runs`, derived from the events log and the PID):
+  `working` (thinking / writing / running a tool, with the tool and its elapsed time), `waiting` (with the reason:
+  background task, its notification turn, a short idle before ending, API retry or rate limit), `finished` (with the
+  outcome: `success`, `max_turns`, `budget`, `error`, `stopped`), `crashed` (process gone without an end record; shows the
+  last event and log line) and `ended` (old runs with neither an events log nor a result file). `status`
+  (`running`/`finished`/`dead`/`ended`) is kept for older scripts.
+- **Runs list** with filters (name, finished / crashed / ended, last 24 h only, last N; saved in the browser), model, cost,
+  turns, a live activity line, branch, last 3 commits, uncommitted count. **Live transcript** of the selected run: `●` text and
+  tool lines with `⎿` results, thinking blocks dimmed and collapsible, your interjections highlighted, and a Claude Code style
+  spinner line (`✻ Pondering… (12s · ↓ 1.4k tokens)`, `Running Bash: cargo test… (40s)`, `Waiting for background task: …`).
+- **Progress events:** the runner turns on the SDK's partial messages and writes a throttled `progress` event (at most one
+  every 2 s: phase, output tokens so far, tail of the thinking text). Newer models return thinking as a signature only;
+  set `thinking_display = "summarized"` under `[agent]` (or `agentctl --thinking-display summarized`) to get the text.
+  That only changes what is returned, not whether or how much the model thinks.
 - **Spend bar:** total logged spend vs the cap, session spend, and an on-demand "actual billed" button (Admin API, needs an admin key; lags by hours).
 - **New agent:** name (becomes the branch and worktree), base branch, model (with a price note), budget, max turns, brief text
   or an existing `briefs/` file, optional `--resume` session. It shows the remaining headroom (cap - logged - budgets of active runs)

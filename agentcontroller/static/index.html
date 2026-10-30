@@ -5,18 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agents</title>
 <style>
+/* Claude Code's terminal look: dark always. */
 :root {
-  --bg:#F5F0E8; --card:#FFFDF9; --ink:#2B2824; --muted:#8A8378; --line:#E6DFD2; --accent:#D97757; --accent-d:#C4623F;
-  --bubble:#FFFFFF; --user:#FBE3D8; --tool:#EFE8DB; --ok:#5E8C61; --bad:#B94A48; --warn:#C48A1E;
-  --shadow:0 1px 2px rgba(60,40,20,.08),0 4px 14px rgba(60,40,20,.06);
+  --bg:#141413; --card:#1E1E1C; --ink:#E8E6E1; --muted:#8B8983; --line:#2E2D2A; --accent:#D97757; --accent-d:#C4623F;
+  --bubble:transparent; --user:#2C2B28; --tool:transparent; --ok:#4EBA65; --bad:#FF6B80; --warn:#E5C07B;
+  --shadow:none; color-scheme:dark;
 }
-@media (prefers-color-scheme: dark) { :root {
-  --bg:#1F1E1D; --card:#2A2927; --ink:#EDE8DF; --muted:#9A948A; --line:#3A3835; --bubble:#2F2D2B; --user:#4A2E23;
-  --tool:#2A2927; --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.25);
-} }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column;
-  font:14px/1.5 "Styrene A","Tiempos Text",ui-serif,Georgia,"Segoe UI",system-ui,sans-serif; }
+  font:13.5px/1.5 ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,monospace; }
 code,pre,.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-size:12.5px; }
 header { display:flex; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
 header h1 { font-size:17px; margin:0; font-weight:600; letter-spacing:.2px; }
@@ -32,19 +29,46 @@ button.primary { background:var(--accent); border-color:var(--accent); color:#ff
 button.primary.armed { background:var(--accent-d); outline:2px solid var(--accent); }
 button.danger:hover:not(:disabled) { border-color:var(--bad); color:var(--bad); }
 main { flex:1; display:flex; min-height:0; }
-#runs { width:250px; flex:none; overflow:auto; padding:10px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+#side { width:270px; flex:none; overflow:auto; padding:10px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+#runs { display:flex; flex-direction:column; gap:8px; }
 .run { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:9px 10px; cursor:pointer; box-shadow:var(--shadow);
   display:grid; grid-template-columns:34px 1fr; gap:8px; align-items:center; }
 .run.sel { border-color:var(--accent); }
 .run .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .run .meta { color:var(--muted); font-size:12px; }
-.pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#fff; }
-.pill.running { background:var(--ok); } .pill.finished { background:var(--muted); } .pill.stalled { background:var(--warn); } .pill.dead { background:var(--bad); }
+.pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#111; }
+.pill.working { background:var(--ok); } .pill.waiting { background:var(--warn); } .pill.finished { background:var(--muted); }
+.pill.crashed { background:var(--bad); } .pill.ended { background:var(--line); color:var(--muted); }
+.pill.finished.max_turns, .pill.finished.budget { background:var(--warn); } .pill.finished.error { background:var(--bad); }
+.run .act { font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; grid-column:1 / -1; }
+.run .act .g { color:var(--accent); }
+#filters { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); padding-bottom:6px; border-bottom:1px solid var(--line); }
+#filters input[type=text], #filters input[type=number] { font:inherit; color:var(--ink); background:var(--card); border:1px solid var(--line);
+  border-radius:6px; padding:3px 6px; width:100%; }
+#filters input[type=number] { width:56px; }
+#filters label { display:flex; align-items:center; gap:5px; cursor:pointer; }
+#filters .two { display:flex; flex-wrap:wrap; gap:2px 10px; }
+/* transcript */
+.ln { white-space:pre-wrap; word-break:break-word; padding-left:2ch; text-indent:-2ch; cursor:pointer; }
+.ln.sel { background:var(--user); }
+.ln .b { color:var(--ink); } .ln.toolln .b { color:var(--ok); } .ln.toolln.err .b { color:var(--bad); } .ln.toolln.open .b { color:var(--muted); }
+.ln .tn { font-weight:700; }
+.res { color:var(--muted); white-space:pre-wrap; word-break:break-word; padding-left:5ch; text-indent:-3ch; max-height:7.5em; overflow:hidden; cursor:pointer; }
+.res.full { max-height:none; }
+.ln.user { background:var(--user); padding:4px 8px 4px calc(2ch + 8px); color:var(--ink); border-radius:4px; }
+details.think { color:var(--muted); font-style:italic; padding-left:2ch; }
+details.think summary { cursor:pointer; list-style:none; text-indent:-2ch; }
+details.think div { white-space:pre-wrap; word-break:break-word; }
+#spinner { padding:6px 14px; min-height:2.2em; border-top:1px solid var(--line); }
+#spinner .g { color:var(--accent); display:inline-block; width:2ch; }
+#spinner .v { color:var(--accent); }
+#spinner .m { color:var(--muted); }
+#spinner .x { display:block; color:var(--muted); font-style:italic; padding-left:2ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #pane { flex:1; display:flex; flex-direction:column; min-width:0; }
 #runhead { padding:8px 14px; border-bottom:1px solid var(--line); font-size:12.5px; color:var(--muted); }
 #runhead b { color:var(--ink); }
 #runhead .commits { margin-top:2px; white-space:pre-wrap; }
-#stream { flex:1; overflow:auto; padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
+#stream { flex:1; overflow:auto; padding:12px 14px; display:flex; flex-direction:column; gap:6px; }
 .bubble { background:var(--bubble); border:1px solid var(--line); border-radius:14px 14px 14px 4px; padding:8px 12px; max-width:92%;
   white-space:pre-wrap; word-break:break-word; box-shadow:var(--shadow); cursor:pointer; }
 .bubble.sel { outline:2px solid var(--accent); }
@@ -56,7 +80,7 @@ details.tool summary::before { content:"> "; color:var(--accent); }
 details[open].tool summary::before { content:"v "; }
 details.tool .res { margin:4px 0; white-space:pre-wrap; color:var(--muted); }
 details.tool.err summary { color:var(--bad); }
-.sys { text-align:center; color:var(--muted); font-size:12px; }
+.sys { color:var(--muted); font-size:12px; }
 #composer { border-top:1px solid var(--line); padding:10px 14px; display:flex; flex-direction:column; gap:6px; }
 textarea { width:100%; resize:vertical; min-height:54px; max-height:200px; font:inherit; color:var(--ink); background:var(--card);
   border:1px solid var(--line); border-radius:12px; padding:8px 10px; }
@@ -84,16 +108,17 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
 .clawd.running .leg:nth-of-type(odd) { animation:step 1.1s steps(2) infinite; }
 .clawd.finished .eye { display:none; } .clawd.finished .closed { display:block; } .clawd .closed { display:none; }
 .clawd.finished .zz { display:block; fill:var(--muted); animation:zz 2.4s ease-in-out infinite; }
-.clawd.stalled .bang { display:block; fill:var(--bad); }
-.clawd.stalled { filter:saturate(.5); }
-.clawd.dead .bang { display:block; fill:var(--bad); }
-.clawd.dead { filter:grayscale(.85); opacity:.7; }
+.clawd.waiting .zz { display:block; fill:var(--warn); animation:zz 2.4s ease-in-out infinite; }
+.clawd.crashed .bang { display:block; fill:var(--bad); }
+.clawd.crashed { filter:grayscale(.85); opacity:.7; }
+.clawd.ended { filter:grayscale(.85); opacity:.5; }
 @keyframes bob { 50% { transform:translateY(-2px); } }
 @keyframes step { 50% { transform:translateY(-1px); } }
 @keyframes zz { 50% { opacity:.3; transform:translateY(-1px); } }
 @media (max-width:640px) {
   main { flex-direction:column; }
-  #runs { width:auto; flex-direction:row; border-right:0; border-bottom:1px solid var(--line); max-height:none; }
+  #side { width:auto; border-right:0; border-bottom:1px solid var(--line); max-height:40vh; }
+  #runs { flex-direction:row; overflow:auto; }
   .run { min-width:190px; }
   .bar { width:90px; }
 }
@@ -113,12 +138,28 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
   </div>
 </header>
 <main>
-  <aside id="runs"></aside>
+  <aside id="side">
+    <div id="filters">
+      <input type="text" id="f-name" placeholder="filter by name" autocomplete="off">
+      <div class="two">
+        <label><input type="checkbox" id="f-finished"> finished</label>
+        <label><input type="checkbox" id="f-crashed"> crashed</label>
+        <label><input type="checkbox" id="f-ended"> ended (no record)</label>
+      </div>
+      <div class="two">
+        <label title="finished/crashed runs quiet for over 24 h stay hidden"><input type="checkbox" id="f-recent"> last 24 h only</label>
+        <label>show last <input type="number" id="f-n" min="1" step="1"></label>
+      </div>
+      <span id="f-hidden"></span>
+    </div>
+    <div id="runs"></div>
+  </aside>
   <section id="pane">
     <div id="runhead"></div>
     <div id="stream"><div class="empty">Select a run.</div></div>
+    <div id="spinner"></div>
     <div id="composer">
-      <textarea id="text" placeholder="Message for the selected run (or text to forward). Click a bubble to select it for forwarding."></textarea>
+      <textarea id="text" placeholder="Message for the selected run (or text to forward). Click a line to select it for forwarding."></textarea>
       <div class="row">
         <button class="primary" id="send">Send to agent</button>
         <button class="danger" id="stop">Stop after this turn</button>
@@ -176,30 +217,139 @@ function clawd(state, px) {
 }
 $("#logo").innerHTML = clawd("running", 40);
 
-let runs = [], current = null, es = null, selBubble = null, lastTool = null, stick = true;
+let runs = [], current = null, es = null, selBubble = null, stick = true;
+let openTools = {}, toolQueue = [];  // tool lines waiting for their result (by id; FIFO for old logs without ids)
+let fetchedAt = Date.now(), skew = 0;  // skew: browser clock minus the server's local clock (event ts have no zone)
+const acts = {};  // run name -> {kind, text, tokens, t0, upd, ...}: the activity the spinner shows
 
+// ---- persisted sidebar filters ----
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem("ac." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("ac." + k, JSON.stringify(v)); } catch {} },
+};
+const filt = Object.assign({ name: "", finished: true, crashed: true, ended: false, recent: true, n: 30 }, LS.get("filters", {}));
+$("#f-name").value = filt.name; $("#f-n").value = filt.n;
+for (const k of ["finished", "crashed", "ended", "recent"]) $("#f-" + k).checked = !!filt[k];
+$("#filters").oninput = () => {
+  filt.name = $("#f-name").value.trim(); filt.n = Math.max(1, parseInt($("#f-n").value) || 30);
+  for (const k of ["finished", "crashed", "ended", "recent"]) filt[k] = $("#f-" + k).checked;
+  LS.set("filters", filt); drawRuns();
+};
+function visibleRuns() {
+  const out = []; let hidden = 0, kept = 0;
+  for (const r of runs) {
+    if (filt.name && !r.name.toLowerCase().includes(filt.name.toLowerCase())) { hidden++; continue; }
+    if (r.active || r.name === current) { out.push(r); continue; }  // live runs are never filtered away
+    const old = r.idle_seconds > 86400 && (r.state === "finished" || r.state === "crashed");
+    if (!filt[r.state] || (filt.recent && old) || kept >= filt.n) { hidden++; continue; }
+    kept++; out.push(r);
+  }
+  return [out, hidden];
+}
+
+// ---- spinner (Claude Code's glyphs and verbs) ----
+const GLYPHS = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+const VERBS = ["Thinking", "Deliberating", "Pondering", "Ruminating", "Mulling", "Cogitating", "Considering", "Reasoning",
+  "Musing", "Contemplating", "Noodling", "Percolating", "Brewing", "Synthesizing", "Puzzling"];
+const glyph = () => GLYPHS[Math.floor(Date.now() / 120) % GLYPHS.length];
+const verb = name => { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0; return VERBS[Math.abs(h + Math.floor(Date.now() / 4000)) % VERBS.length]; };
+function dur(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+  return Math.floor(s / 3600) + "h " + Math.floor(s % 3600 / 60) + "m";
+}
+const ktok = n => n == null ? null : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+const tsMs = ts => new Date(ts).getTime() + skew;  // "YYYY-MM-DDTHH:MM:SS" parses as browser-local time
+function actFrom(r) {
+  const a = r.activity;
+  if (!a) return null;
+  const t0 = a.age != null ? fetchedAt - a.age * 1000 : Date.now();
+  return { ...a, t0, upd: t0 };
+}
+// One-line description; `long` adds the elapsed/tokens suffix used by the main spinner.
+function actLine(name, a) {
+  if (!a) return "";
+  const el_ = dur((Date.now() - a.t0) / 1000), tok = ktok(a.tokens);
+  const meta = `(${el_}${tok ? " · ↓ " + tok + " tokens" : ""})`;
+  switch (a.kind) {
+    case "thinking": return [verb(name) + "…", meta];
+    case "writing": return [(a.text && a.text.startsWith("writing ") ? "Preparing " + a.text.slice(8) : "Writing") + "…", meta];
+    case "tool": return ["Running " + a.text + "…", meta];
+    case "task": return ["Waiting for " + a.text, `(${el_})`];
+    case "notification": case "inbox": case "rate_limit": case "retry": return ["Waiting: " + a.text, `(${el_})`];
+    default: return [a.text || a.kind, ""];
+  }
+}
+function drawSpinner() {
+  const box = $("#spinner"), r = runs.find(x => x.name === current);
+  box.textContent = "";
+  if (!r) return;
+  if (r.active) {
+    const a = acts[r.name] || actFrom(r);
+    const [main, meta] = actLine(r.name, a);
+    const g = el("span", "g", r.state === "waiting" ? "·" : glyph());
+    box.append(g, el("span", "v", main + " "), el("span", "m", meta));
+    if (a && (a.kind === "thinking" || a.kind === "writing") && a.text && !a.text.startsWith("writing "))
+      box.append(el("span", "x", a.text));
+  } else if (r.state === "finished") {
+    box.append(el("span", "m", `✓ finished · ${r.outcome} · ${usd(r.cost)} · ${r.turns} turns`));
+  } else if (r.state === "crashed") {
+    box.append(el("span", "v", "✗ crashed (process gone, no end record) "), el("span", "m", r.activity?.text || ""));
+    if (r.activity?.log) box.append(el("span", "x", "log: " + r.activity.log));
+  } else {
+    box.append(el("span", "m", "ended (no record) · " + (r.activity?.text || "")));
+  }
+}
+let actNodes = [];
+setInterval(() => {
+  drawSpinner();
+  for (const [r, n] of actNodes) { const a = acts[r.name] || actFrom(r); n.textContent = actLine(r.name, a).join(" "); n.previousSibling.textContent = r.state === "waiting" ? "· " : glyph() + " "; }
+}, 120);
+
+// ---- run list ----
 async function loadRuns() {
   try { runs = await (await fetch("/api/runs")).json(); } catch { return; }
-  const box = $("#runs"); box.textContent = "";
+  fetchedAt = Date.now();
+  const ref = runs.find(r => r.last_activity);
+  if (ref) skew = fetchedAt - ref.idle_seconds * 1000 - new Date(ref.last_activity).getTime();
   for (const r of runs) {
+    const a = actFrom(r), old = acts[r.name];
+    // A newer SSE-derived activity (between polls) wins over the poll's.
+    acts[r.name] = old && a && old.upd > a.upd + 1500 ? old : a;
+  }
+  drawRuns();
+}
+function drawRuns() {
+  const [vis, hidden] = visibleRuns();
+  const box = $("#runs"); box.textContent = ""; actNodes = [];
+  for (const r of vis) {
     const d = el("div", "run" + (r.name === current ? " sel" : ""));
-    const g = el("div"); g.innerHTML = clawd(r.status, 32);
+    const g = el("div"); g.innerHTML = clawd(r.state === "working" ? "running" : r.state, 32);
     const t = el("div");
     t.append(el("div", "nm", r.name));
-    const p = el("span", "pill " + r.status, r.status);
+    const label = r.outcome && r.outcome !== "success" ? `${r.state} · ${r.outcome.replace("_", " ")}` : r.state === "ended" ? "ended (no record)" : r.state;
+    const p = el("span", "pill " + r.state + " " + (r.outcome || ""), label);
     const m = el("div", "meta", `${(r.model || "?").replace("claude-", "")} · ${usd(r.cost)} · ${r.turns} turns`);
     t.append(p, m);
-    d.append(g, t); d.onclick = () => select(r.name);
+    d.append(g, t);
+    if (r.active) {
+      const line = el("div", "act"), n = el("span");
+      line.append(el("span", "g", glyph() + " "), n); d.append(line); actNodes.push([r, n]);
+    } else if (r.state === "crashed") d.append(el("div", "act", "last: " + (r.activity?.text || "?")));
+    d.title = r.activity?.text || "";
+    d.onclick = () => select(r.name);
     box.append(d);
   }
   if (!runs.length) box.append(el("div", "hint", "No runs yet."));
+  $("#f-hidden").textContent = hidden ? `${hidden} hidden by filters` : "";
   const r = runs.find(x => x.name === current);
   if (r) {
     const h = $("#runhead"); h.textContent = "";
     const b = el("div"); b.innerHTML = "<b></b> "; b.firstChild.textContent = r.name;
     b.append(`${r.branch || "-"} · ${r.worktree ? "uncommitted: " + (r.dirty ?? "?") : "no worktree"}${r.legacy ? " · legacy log" : ""}`);
     h.append(b, el("div", "commits mono", (r.commits || []).join("\n")));
-    const live = r.status === "running";
+    const live = r.active;
     const act = el("div", "actions");
     const btn = (label, cls, fn, off) => { const x = el("button", cls, label); x.disabled = !!off; x.onclick = fn; act.append(x); };
     btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
@@ -211,44 +361,83 @@ async function loadRuns() {
     h.append(act);
     $("#send").disabled = $("#stop").disabled = !live;
   }
+  drawSpinner();
 }
 
 function select(name) {
-  current = name; selBubble = null; lastTool = null;
+  current = name; selBubble = null; openTools = {}; toolQueue = [];
   if (es) es.close();
   $("#stream").textContent = "";
   es = new EventSource("/api/stream?run=" + encodeURIComponent(name));
   es.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch {} };
-  loadRuns();
+  drawRuns();
 }
 
+// ---- transcript ----
 function add(node) {
   const s = $("#stream");
   s.append(node);
   if (stick) s.scrollTop = s.scrollHeight;
 }
-function bubble(cls, text, ts) {
-  const b = el("div", "bubble " + cls);
-  if (ts) b.append(el("span", "ts", ts.replace("T", " ")));
-  b.append(document.createTextNode(text));
+function line(cls, bullet, text, ts) {
+  const b = el("div", "ln " + cls);
+  b.append(el("span", "b", bullet + " "), document.createTextNode(text));
+  if (ts) b.title = ts.replace("T", " ");
   b.dataset.text = text;
   b.onclick = () => { if (selBubble) selBubble.classList.remove("sel"); selBubble = selBubble === b ? null : b; if (selBubble) b.classList.add("sel"); updateHint(); };
   return b;
 }
+// Live events from the stream move the spinner between polls (older replayed events don't).
+function bump(e, a) {
+  if (!e.ts) return;
+  const t = tsMs(e.ts), cur = acts[current];
+  if (cur && t < cur.upd) return;
+  acts[current] = { ...a, upd: t, t0: a.keepT0 && cur && (cur.kind === "thinking" || cur.kind === "writing") ? cur.t0 : t };
+}
 function render(e) {
   switch (e.kind) {
-    case "text": add(bubble("", e.text, e.ts)); break;
-    case "user": add(bubble("user", e.text, e.ts)); break;
-    case "tool": {
-      const d = el("details", "tool"); d.append(el("summary", "mono", `${e.name}: ${e.arg || ""}`));
-      lastTool = d; add(d); break;
+    case "text": add(line("", "●", e.text, e.ts)); bump(e, { kind: "thinking", text: "", tokens: acts[current]?.tokens, keepT0: true }); break;
+    case "user": add(line("user", ">", e.text, e.ts)); bump(e, { kind: "thinking", text: "" }); break;
+    case "thinking": {
+      const d = el("details", "think");
+      d.append(el("summary", "", "✻ Thinking…"), el("div", "", e.text));
+      add(d); break;
     }
-    case "tool_result":
-      if (lastTool) { lastTool.append(el("div", "res mono", e.text || "(empty)")); if (!e.ok) lastTool.classList.add("err"); lastTool = null; }
+    case "tool": {
+      const blk = el("div", "toolblk");
+      const l = line("toolln open", "●", "", e.ts);
+      l.lastChild.remove();
+      l.append(el("span", "tn", e.name), document.createTextNode(`(${e.arg || ""})`));
+      l.dataset.text = `${e.name}(${e.arg || ""})`;
+      blk.append(l); add(blk);
+      if (e.id) openTools[e.id] = blk; else toolQueue.push(blk);
+      bump(e, { kind: "tool", text: `${e.name}: ${e.arg || ""}`, tool: e.name });
       break;
+    }
+    case "tool_result": {
+      const blk = (e.id && openTools[e.id]) || toolQueue.shift();
+      if (e.id) delete openTools[e.id];
+      if (blk) {
+        const l = blk.firstChild; l.classList.remove("open"); if (!e.ok) l.classList.add("err");
+        const res = el("div", "res", "⎿  " + (e.text || "(empty)"));
+        res.onclick = () => res.classList.toggle("full");
+        blk.append(res);
+      }
+      if (!Object.keys(openTools).length && !toolQueue.length) bump(e, { kind: "thinking", text: "" });
+      break;
+    }
+    case "progress":
+      bump(e, { kind: e.phase === "text" || e.phase === "tool_input" ? "writing" : "thinking",
+        text: e.excerpt || (e.tool ? "writing " + e.tool + " call" : ""), tokens: e.tokens, keepT0: true });
+      break;
+    case "task":
+      add(el("div", "sys", e.status === "started" ? `⧗ background task started: ${e.text || e.id}` : `⧗ background task ${e.status}${e.text ? ": " + e.text : ""}`));
+      break;
+    case "retry": add(el("div", "sys", `↻ API retry ${e.attempt}/${e.max_retries}: ${e.error || e.error_status || ""}`)); break;
+    case "rate_limit": add(el("div", "sys", `rate limit ${e.status}${e.type ? " (" + e.type + ")" : ""}`)); break;
     case "start": add(el("div", "sys", `started · ${(e.model || "").replace("claude-", "")} · budget ${usd(e.budget)} · ${e.brief || ""}`)); break;
     case "result": add(el("div", "sys", `turn done · ${usd(e.cost)} · ${e.turns} turns · ${e.subtype}`)); loadRuns(); break;
-    case "end": add(el("div", "sys", "run ended")); loadRuns(); break;
+    case "end": add(el("div", "sys", e.killed ? "run stopped (killed)" : "run ended")); loadRuns(); break;
   }
 }
 $("#stream").addEventListener("scroll", () => { const s = $("#stream"); stick = s.scrollHeight - s.scrollTop - s.clientHeight < 40; });
@@ -258,7 +447,7 @@ async function post(url, body) {
   return r.json();
 }
 const msgText = () => $("#text").value.trim();
-function updateHint() { $("#hint").textContent = selBubble && !msgText() ? "Forward uses the selected bubble." : ""; }
+function updateHint() { $("#hint").textContent = selBubble && !msgText() ? "Forward uses the selected line." : ""; }
 $("#text").oninput = updateHint;
 
 let armTimer = null;
@@ -364,7 +553,7 @@ $("#n-go").onclick = async () => {
 };
 fetch("/api/config").then(r => r.json()).then(c => { $("#title").textContent = c.project + " agents"; document.title = c.project + " agents"; });
 
-loadRuns().then(() => { if (runs.length && !current) select(runs[0].name); });
+loadRuns().then(() => { const v = visibleRuns()[0]; if (v.length && !current) select(v[0].name); });
 loadSpend();
 setInterval(loadRuns, 4000); setInterval(loadSpend, 8000);
 </script>

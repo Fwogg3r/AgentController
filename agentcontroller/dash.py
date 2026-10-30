@@ -287,6 +287,13 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
     # With a PID file (every run since the runner writes its own) the process state decides
     # live vs crashed; only runs without one fall back to file activity.
     info.update(derive_state(name, events, alive, has_pid, idle))
+    if info["activity"] and info["activity"].get("since"):
+        # Seconds, computed here so a browser in another time zone (--remote) shows the right elapsed time.
+        try:
+            t = time.mktime(time.strptime(info["activity"]["since"], "%Y-%m-%dT%H:%M:%S"))
+            info["activity"]["age"] = max(0, round(time.time() - t))
+        except ValueError:
+            pass
     info["active"] = info["state"] in ("working", "waiting")
     info["pid_alive"] = alive
     info["idle_seconds"] = round(idle)

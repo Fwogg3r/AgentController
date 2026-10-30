@@ -18,6 +18,7 @@ cap = 25.0                            # hard cap in USD across all logged runs; 
 default_model = "sonnet"
 default_base = "main"
 max_turns = 250
+# thinking_display = "summarized"  # return thinking text for the dashboard (display only; newer models omit it)
 # Extra deny regexes for the agent's shell (matched case-insensitively). Use TOML single quotes.
 deny = ['\bdocker\s+push\b']
 # Extra PATH entries for the agent's shell (for example the Rust toolchain).
