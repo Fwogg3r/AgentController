@@ -17,12 +17,16 @@ import time
 from pathlib import Path
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, PermissionResultAllow, PermissionResultDeny,
-                              ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage,
-                              query)
+                              ResultMessage, SystemMessage, TaskNotificationMessage, TaskStartedMessage,
+                              TaskUpdatedMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, query)
+from claude_agent_sdk.types import TERMINAL_TASK_STATUSES
 
 from .config import ECONOMY_RULES, Config, load
 
 IDLE_GRACE = 2.0  # seconds to wait after the last result for an inbox message before ending
+# After the last background task ends, the CLI starts a turn on its notification. Wait this long for
+# that turn's result; if the notification was absorbed by a turn already running, none comes.
+FOLLOWUP_GRACE = 120.0
 
 # Static allow-patterns proved unreliable headless, so every tool call goes through `approve`:
 # allow by default, deny dangerous shell patterns, confine file writes to the agent's worktree.
@@ -98,6 +102,11 @@ class Session:
     (`can_use_tool`) alive. Idle rule: every user message yields one ResultMessage. When all sent
     messages have a result and nothing new arrives within IDLE_GRACE, the generator returns and the
     run ends. A {"control":"stop"} line ends the run after the current turn's result.
+
+    Background tasks (`run_in_background` Bash, background agents) hold the run open: closing the
+    prompt stream while one runs kills the permission channel, so the turn its notification starts
+    fails every tool approval ("Stream closed"). The run never idles out while a task is active, and
+    after the last one ends it waits for the notification turn's result.
     """
 
     def __init__(self, brief: str, inbox: Path, events: EventLog):
@@ -106,6 +115,8 @@ class Session:
         self.stop = False
         self.idle_since: float | None = None
         self.done = False
+        self.tasks: set[str] = set()
+        self.followup_by: float | None = None
         # Lines left over from an earlier run (e.g. before --resume) must not be replayed.
         self.seen = len(inbox.read_text(encoding="utf-8").splitlines()) if inbox.exists() else 0
 
@@ -124,8 +135,21 @@ class Session:
 
     def on_result(self) -> None:
         self.pending -= 1
-        if self.pending <= 0:
+        self.followup_by = None
+        if self.pending <= 0 and not self.tasks:
             self.idle_since = time.time()
+
+    def task_started(self, task_id: str) -> None:
+        self.tasks.add(task_id)
+        self.idle_since = None
+
+    def task_ended(self, task_id: str) -> None:
+        if task_id not in self.tasks:
+            return
+        self.tasks.discard(task_id)
+        if not self.tasks:
+            self.idle_since = None
+            self.followup_by = time.time() + FOLLOWUP_GRACE
 
     async def prompts(self):
         self.pending = 1
@@ -142,6 +166,9 @@ class Session:
                     yield user_msg(item["text"])
             if self.stop and self.pending <= 0:
                 return
+            if self.followup_by is not None and time.time() >= self.followup_by:
+                self.followup_by = None
+                self.idle_since = time.time()
             if self.idle_since is not None and time.time() - self.idle_since >= IDLE_GRACE:
                 return
 
@@ -165,6 +192,17 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
                 # Printed immediately so a crashed run can be resumed with --resume.
                 say(f"[session] {msg.data.get('session_id')}")
                 events.write("session", session_id=msg.data.get("session_id"))
+            elif isinstance(msg, TaskStartedMessage):
+                session.task_started(msg.task_id)
+                events.write("task", id=msg.task_id, status="started", text=msg.description)
+            elif isinstance(msg, TaskNotificationMessage):
+                session.task_ended(msg.task_id)
+                events.write("task", id=msg.task_id, status=msg.status, text=msg.summary)
+            elif isinstance(msg, TaskUpdatedMessage):
+                status = msg.status or msg.patch.get("status")
+                if status in TERMINAL_TASK_STATUSES:
+                    session.task_ended(msg.task_id)
+                    events.write("task", id=msg.task_id, status=status)
             elif isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
