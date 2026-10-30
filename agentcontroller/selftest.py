@@ -62,6 +62,12 @@ def wait_for(fn, secs=15):
 
 
 def main() -> int:
+    # A dashboard already on PORT would answer instead of the temp one, and its launches are real paid runs.
+    import socket
+    with socket.socket() as s:
+        if s.connect_ex(("127.0.0.1", PORT)) == 0:
+            print(f"port {PORT} is in use (another agentdash?); stop it first", file=sys.stderr)
+            return 2
     proj = Path(tempfile.mkdtemp())
     (proj / "stub.py").write_text(STUB)
     (proj / "agentcontroller.toml").write_text(
