@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import claude_sessions
 from .config import Config, load
 
 PAGE = Path(__file__).resolve().parent / "static" / "index.html"
@@ -314,6 +315,10 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
     return info
 
 
+def plan_dir() -> Path | None:
+    return claude_sessions.project_dir(CFG.root, CFG.claude_projects_dir)
+
+
 def active_runs(usage: list[dict]) -> list[dict]:
     return [r for r in (run_info(n, usage, git_info=False) for n in run_names()) if r["active"]]
 
@@ -544,6 +549,12 @@ class Handler(BaseHTTPRequestHandler):
             usage = usage_records()
             runs = [run_info(n, usage) for n in run_names()]
             runs.sort(key=lambda r: (not r["active"], -last_activity(r["name"])))
+            if (q.get("plan") or ["1"])[0] != "0":  # Claude Code sessions: never in spend/budget, only listed
+                try:
+                    age = float((q.get("plan_age") or [claude_sessions.DEFAULT_AGE])[0]) or claude_sessions.DEFAULT_AGE
+                except ValueError:
+                    age = claude_sessions.DEFAULT_AGE
+                runs += claude_sessions.list_runs(plan_dir(), age)
             return self._json(runs)
         if u.path == "/api/spend":
             return self._json(spend())
@@ -606,16 +617,17 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": False, "error": "not found"}, 404)
 
     def _stream(self, name: str) -> None:
+        plan = claude_sessions.find_file(plan_dir(), name)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
-        path = CFG.runs / f"{name}.events.jsonl"
-        pos, last_beat = 0, time.time()
+        path = plan or CFG.runs / f"{name}.events.jsonl"
+        pos, last_beat, first = 0, time.time(), []
         try:
-            if not path.exists() and (CFG.runs / f"{name}.log").exists():
+            if not plan and not path.exists() and (CFG.runs / f"{name}.log").exists():
                 for l in (CFG.runs / f"{name}.log").read_text(encoding="utf-8", errors="replace").splitlines():
                     if l.strip():
                         self.wfile.write(f"data: {json.dumps({'kind': 'text', 'text': l}, ensure_ascii=False)}\n\n".encode())
@@ -627,8 +639,17 @@ class Handler(BaseHTTPRequestHandler):
                         chunk = fh.read()
                     end = chunk.rfind(b"\n") + 1  # only complete lines; a partial write is picked up next poll
                     pos += end
-                    for l in chunk[:end].decode("utf-8", errors="replace").splitlines():
-                        if l.strip():
+                    for l in chunk[:end].decode("utf-8", errors="replace").split("\n"):
+                        if not l.strip():
+                            continue
+                        if plan:  # transcript lines -> the event shapes the page renders
+                            try:
+                                evs = claude_sessions.to_events(json.loads(l), first)
+                            except ValueError:
+                                continue
+                            for ev in evs:
+                                self.wfile.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8"))
+                        else:
                             self.wfile.write(f"data: {l}\n\n".encode("utf-8"))
                     self.wfile.flush()
                     last_beat = time.time()

@@ -42,6 +42,7 @@ main { flex:1; display:flex; min-height:0; }
 .run .meta { color:var(--muted); font-size:12px; }
 .pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#111; }
 .pill.working { background:var(--ok); } .pill.waiting { background:var(--warn); } .pill.finished { background:var(--muted); }
+.run.sub { margin-left: 18px; }
 .pill.oneshot { background:transparent; border:1px solid var(--accent); color:var(--accent); margin-right:4px; }
 .pill.finished.max_tokens, .pill.finished.refusal { background:var(--warn); }
 .pill.crashed { background:var(--bad); } .pill.ended { background:var(--line); color:var(--muted); }
@@ -163,6 +164,7 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
       </div>
       <div class="two">
         <label title="one-shot API calls (agentask) are shown unless this is on"><input type="checkbox" id="f-noneshot"> hide non-agentic</label>
+        <label title="Claude Code sessions and their subagents (plan-billed, read from ~/.claude/projects)"><input type="checkbox" id="f-nplan"> hide plan sessions</label>
       </div>
       <div class="two">
         <label title="finished/crashed runs quiet for over 24 h stay hidden"><input type="checkbox" id="f-recent"> last 24 h only</label>
@@ -247,12 +249,12 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem("ac." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("ac." + k, JSON.stringify(v)); } catch {} },
 };
-const filt = Object.assign({ name: "", finished: true, crashed: true, ended: false, recent: true, noneshot: false, n: 30 }, LS.get("filters", {}));
+const filt = Object.assign({ name: "", finished: true, crashed: true, ended: false, recent: true, noneshot: false, nplan: false, n: 30 }, LS.get("filters", {}));
 $("#f-name").value = filt.name; $("#f-n").value = filt.n;
-for (const k of ["finished", "crashed", "ended", "recent", "noneshot"]) $("#f-" + k).checked = !!filt[k];
+for (const k of ["finished", "crashed", "ended", "recent", "noneshot", "nplan"]) $("#f-" + k).checked = !!filt[k];
 $("#filters").oninput = () => {
   filt.name = $("#f-name").value.trim(); filt.n = Math.max(1, parseInt($("#f-n").value) || 30);
-  for (const k of ["finished", "crashed", "ended", "recent", "noneshot"]) filt[k] = $("#f-" + k).checked;
+  for (const k of ["finished", "crashed", "ended", "recent", "noneshot", "nplan"]) filt[k] = $("#f-" + k).checked;
   LS.set("filters", filt); drawRuns();
 };
 function visibleRuns() {
@@ -260,12 +262,22 @@ function visibleRuns() {
   for (const r of runs) {
     if (filt.name && !r.name.toLowerCase().includes(filt.name.toLowerCase())) { hidden++; continue; }
     if (r.oneshot && filt.noneshot && r.name !== current) { hidden++; continue; }
+    if (r.plan && filt.nplan && r.name !== current) { hidden++; continue; }
     if (r.active || r.name === current) { out.push(r); continue; }  // live runs are never filtered away
     const old = r.idle_seconds > 86400 && (r.state === "finished" || r.state === "crashed");
     if (!filt[r.state] || (filt.recent && old) || kept >= filt.n) { hidden++; continue; }
-    kept++; out.push(r);
+    if (r.kind !== "plan-agent") kept++;  // subagents ride along with their session
+    out.push(r);
   }
-  return [out, hidden];
+  // Subagents sit right after their session (a session whose own row is filtered out leaves them where they were).
+  const byParent = {};
+  for (const r of out) if (r.kind === "plan-agent" && out.some(x => x.name === r.parent)) (byParent[r.parent] ||= []).push(r);
+  const grouped = [];
+  for (const r of out) {
+    if (r.kind === "plan-agent" && byParent[r.parent]?.includes(r)) continue;
+    grouped.push(r, ...(byParent[r.name] || []));
+  }
+  return [grouped, hidden];
 }
 
 // ---- spinner (Claude Code's glyphs and verbs) ----
@@ -314,7 +326,7 @@ function drawSpinner() {
     if (a && (a.kind === "thinking" || a.kind === "writing") && a.text && !a.text.startsWith("writing "))
       box.append(el("span", "x", a.text));
   } else if (r.state === "finished") {
-    box.append(el("span", "m", `✓ finished · ${r.outcome} · ${usd(r.cost)} · ${r.turns} turns`));
+    box.append(el("span", "m", `✓ finished · ${r.outcome} · ${r.plan ? "≈" : ""}${usd(r.cost)} · ${r.plan ? r.tool_calls + " tools" : r.turns + " turns"}`));
   } else if (r.state === "crashed") {
     box.append(el("span", "v", "✗ crashed (process gone, no end record) "), el("span", "m", r.activity?.text || ""));
     if (r.activity?.log) box.append(el("span", "x", "log: " + r.activity.log));
@@ -330,7 +342,10 @@ setInterval(() => {
 
 // ---- run list ----
 async function loadRuns() {
-  try { runs = await (await fetch("/api/runs")).json(); } catch { return; }
+  const q = filt.nplan ? "?plan=0" : "?plan_age=" + (filt.recent ? 86400 : 604800);
+  try { runs = await (await fetch("/api/runs" + q)).json(); } catch { return; }
+  // API runs and plan sessions arrive as two lists: one order (live first, then by last activity).
+  runs.sort((a, b) => (b.active - a.active) || (b.last_activity || "").localeCompare(a.last_activity || ""));
   fetchedAt = Date.now();
   const ref = runs.find(r => r.last_activity);
   if (ref) skew = fetchedAt - ref.idle_seconds * 1000 - new Date(ref.last_activity).getTime();
@@ -345,15 +360,17 @@ function drawRuns() {
   const [vis, hidden] = visibleRuns();
   const box = $("#runs"); box.textContent = ""; actNodes = [];
   for (const r of vis) {
-    const d = el("div", "run" + (r.name === current ? " sel" : ""));
+    const d = el("div", "run" + (r.name === current ? " sel" : "") + (r.kind === "plan-agent" ? " sub" : ""));
     const g = el("div"); g.innerHTML = clawd(r.state === "working" ? "running" : r.state, 32);
     const t = el("div");
-    t.append(el("div", "nm", r.name));
+    t.append(el("div", "nm", r.plan ? r.title : r.name));
     const label = r.outcome && r.outcome !== "success" ? `${r.state} · ${r.outcome.replace("_", " ")}` : r.state === "ended" ? "ended (no record)" : r.state;
     const p = el("span", "pill " + r.state + " " + (r.outcome || ""), label);
     const m = el("div", "meta", `${(r.model || "?").replace("claude-", "")} · ${usd(r.cost)} · ` +
-      (r.oneshot ? `${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` : `${r.turns} turns`));
+      (r.oneshot ? `${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` : r.plan ? `${r.tool_calls} tools` : `${r.turns} turns`));
+    if (r.plan) m.textContent = `${(r.model || "?").replace("claude-", "")} · ≈${usd(r.cost)} API-equiv · ${r.tool_calls} tools`, m.title = "estimate at API prices; billed to the plan, not the API";
     if (r.oneshot) t.append(el("span", "pill oneshot", "ask"));
+    if (r.plan) t.append(el("span", "pill oneshot", r.kind === "plan" ? "plan" : "plan agent"));
     t.append(p, m);
     d.append(g, t);
     if (r.active) {
@@ -371,21 +388,22 @@ function drawRuns() {
   if (r) {
     const h = $("#runhead"); h.textContent = "";
     const b = el("div"); b.innerHTML = "<b></b> "; b.firstChild.textContent = r.name;
-    b.append(r.oneshot ? `one-shot API call · effort ${r.effort || "?"} · ${usd(r.cost)} · ${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` +
+    b.append(r.plan ? `Claude Code ${r.kind === "plan" ? "session" : "subagent of " + r.parent} · ${(r.model || "?").replace("claude-", "")} · ≈${usd(r.cost)} API-equivalent (not billed to the API) · ${ktok(r.tokens_in) ?? 0} in / ${ktok(r.tokens_out) ?? 0} out · cache ${ktok(r.cache_read) ?? 0} read / ${ktok(r.cache_write) ?? 0} write · ${r.tool_calls} tool calls`
+      : r.oneshot ? `one-shot API call · effort ${r.effort || "?"} · ${usd(r.cost)} · ${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` +
       `${r.seconds != null ? " · " + dur(r.seconds) : ""}${r.backfilled ? " · imported from usage log" : ""}`
       : `${r.branch || "-"} · ${r.worktree ? "uncommitted: " + (r.dirty ?? "?") : "no worktree"}${r.legacy ? " · legacy log" : ""}`);
     h.append(b, el("div", "commits mono", (r.commits || []).join("\n")));
     const live = r.active;
     const act = el("div", "actions");
     const btn = (label, cls, fn, off) => { const x = el("button", cls, label); x.disabled = !!off; x.onclick = fn; act.append(x); };
-    if (!r.oneshot) btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
+    if (!r.oneshot && !r.plan) btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
       "Terminates the whole process tree immediately. Use only if a graceful stop did not work. The spend so far is logged.",
       () => act2("/api/kill", r.name)), !r.pid_alive);
-    btn("Remove from list", "", () => confirmThen("Archive " + r.name + "?",
+    if (!r.plan) btn("Remove from list", "", () => confirmThen("Archive " + r.name + "?",
       "Moves its logs to agent_runs/archive/. The worktree and branch stay.", () => act2("/api/archive", r.name)), live);
-    if (!r.oneshot) btn("Delete worktree", "danger", () => deleteWorktree(r.name), live || !r.worktree);
+    if (!r.oneshot && !r.plan) btn("Delete worktree", "danger", () => deleteWorktree(r.name), live || !r.worktree);
     h.append(act);
-    $("#send").disabled = $("#stop").disabled = !live;
+    $("#send").disabled = $("#stop").disabled = !live || !!r.plan;
   }
   drawSpinner();
 }
