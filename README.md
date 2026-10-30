@@ -64,6 +64,30 @@ while it waits, asleep ("zz") when finished, with a "!" when it crashed.
   is merged into its base and clean; otherwise it shows the unmerged commits and the uncommitted count and needs an explicit
   "discard unmerged work". Protected branches (`main`, `master`, ...) and the primary working tree are never touched.
 
+### Claude Code sessions (plan-billed)
+
+The dashboard also lists the interactive Claude Code sessions of the project and the subagents they spawn through the
+`Agent` tool, so plan-billed work shows up beside the `agentctl` runs. They are read from the transcripts Claude Code writes
+(`~/.claude/projects/<slug>/<session>.jsonl` and `<session>/subagents/agent-<id>.jsonl` + `.meta.json`); no hooks, nothing is
+written. The slug is the project root with every non-alphanumeric turned into `-` (matched case-insensitively); override
+the transcript directory with `[claude] projects_dir` in `agentcontroller.toml`.
+
+- `/api/runs` gets entries with `plan: true`, `kind: "plan"` (session, name `plan.<id8>`) or `"plan-agent"` (name
+  `plan.<id8>.<agent8>`, `parent` = the session), `title` (first prompt line / subagent description), model, token totals
+  (`tokens_in/out`, `cache_read/write`), `tool_calls`, and `cost` = an **API-equivalent estimate** at the price table
+  (`cost_estimate: true`). `state` is `working` when the file was written in the last 2 minutes or ends in an unfinished tool
+  call (up to 30 min, e.g. waiting for a subagent), else `finished`.
+- They are **not** part of spend totals, the budget or headroom (those only look at `agentctl` runs). Query parameters:
+  `?plan=0` leaves them out, `?plan_age=SECONDS` sets the age window (default 7 days, at most 40 sessions).
+- Files are parsed incrementally: per file the offset and a running summary are cached, and only appended complete lines are
+  read on each refresh. Unknown or malformed lines are skipped.
+- UI: a `plan` / `plan agent` badge, subagents indented under their session, sidebar checkbox "hide plan sessions" (saved
+  with the other filters), the transcript rendered like a run (prompts, text, tool calls, truncated results, collapsed
+  thinking). No send/kill/archive/worktree actions for these.
+- Limits: transcripts of git worktree checkouts live in their own `~/.claude/projects` directories and are not included; the
+  cost ignores cache-tier price differences beyond the shared price table; a session idle between turns reads `finished`.
+  Tests: `uv run python -m unittest discover tests`.
+
 ### How steering works
 
 The runner appends structured events to `<runs>/<name>.events.jsonl` and polls `<runs>/<name>.inbox.jsonl` about once a second.
