@@ -29,11 +29,15 @@ button.primary { background:var(--accent); border-color:var(--accent); color:#ff
 button.primary.armed { background:var(--accent-d); outline:2px solid var(--accent); }
 button.danger:hover:not(:disabled) { border-color:var(--bad); color:var(--bad); }
 main { flex:1; display:flex; min-height:0; }
-#side { width:270px; flex:none; overflow:auto; padding:10px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
-#runs { display:flex; flex-direction:column; gap:8px; }
+#side { width:270px; flex:none; overflow:auto; scrollbar-gutter:stable; min-width:0; padding:10px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+#runs { display:flex; flex-direction:column; gap:8px; min-width:0; }
+#sidewrap { position:relative; display:flex; flex:none; min-height:0; }
+#grip { position:absolute; top:0; right:-3px; width:7px; height:100%; cursor:col-resize; z-index:5; }
+#grip:hover, #grip.drag { background:var(--accent); opacity:.35; }
 .run { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:9px 10px; cursor:pointer; box-shadow:var(--shadow);
   display:grid; grid-template-columns:34px 1fr; gap:8px; align-items:center; }
 .run.sel { border-color:var(--accent); }
+.run > * { min-width:0; }
 .run .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .run .meta { color:var(--muted); font-size:12px; }
 .pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#111; }
@@ -125,7 +129,9 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
 @keyframes zz { 50% { opacity:.3; transform:translateY(-1px); } }
 @media (max-width:640px) {
   main { flex-direction:column; }
-  #side { width:auto; border-right:0; border-bottom:1px solid var(--line); max-height:40vh; }
+  #sidewrap { display:block; }
+  #grip { display:none; }
+  #side { width:auto !important; border-right:0; border-bottom:1px solid var(--line); max-height:40vh; }
   #runs { flex-direction:row; overflow:auto; }
   .run { min-width:190px; }
   .bar { width:90px; }
@@ -146,6 +152,7 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
   </div>
 </header>
 <main>
+  <div id="sidewrap">
   <aside id="side">
     <div id="filters">
       <input type="text" id="f-name" placeholder="filter by name" autocomplete="off">
@@ -165,6 +172,8 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
     </div>
     <div id="runs"></div>
   </aside>
+  <div id="grip" title="drag to resize"></div>
+  </div>
   <section id="pane">
     <div id="runhead"></div>
     <div id="stream"><div class="empty">Select a run.</div></div>
@@ -356,6 +365,7 @@ function drawRuns() {
     box.append(d);
   }
   if (!runs.length) box.append(el("div", "hint", "No runs yet."));
+  if (typeof fitNames === "function") fitNames();
   $("#f-hidden").textContent = hidden ? `${hidden} hidden by filters` : "";
   const r = runs.find(x => x.name === current);
   if (r) {
@@ -609,6 +619,37 @@ $("#n-go").onclick = async () => {
   if (!r.ok) { $("#n-err").textContent = r.error; return; }
   $("#newdlg").close(); await loadRuns(); select(body.name); loadSpend();
 };
+// ---- resizable sidebar + shrink-to-fit run names ----
+const side = $("#side");
+function setSideW(w, save) {
+  w = Math.max(200, Math.min(600, Math.round(w)));
+  side.style.width = w + "px";
+  if (save) LS.set("sideW", w);
+  fitNames();
+}
+function fitNames() {
+  for (const n of document.querySelectorAll("#runs .run .nm")) {
+    n.style.fontSize = ""; n.title = "";
+    if (n.scrollWidth <= n.clientWidth) continue;
+    const base = parseFloat(getComputedStyle(n).fontSize);
+    const k = Math.max(0.7, n.clientWidth / n.scrollWidth);
+    n.style.fontSize = (base * k).toFixed(2) + "px";
+    if (n.scrollWidth > n.clientWidth) n.title = n.textContent;   // still too long at the minimum: ellipsis + tooltip
+  }
+}
+{
+  const w = LS.get("sideW", null);
+  if (typeof w === "number") side.style.width = Math.max(200, Math.min(600, w)) + "px";
+  const grip = $("#grip");
+  grip.onpointerdown = e => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add("drag");
+    const x0 = e.clientX, w0 = side.getBoundingClientRect().width;
+    grip.onpointermove = m => setSideW(w0 + m.clientX - x0, false);
+    grip.onpointerup = () => { grip.onpointermove = grip.onpointerup = null; grip.classList.remove("drag"); setSideW(side.getBoundingClientRect().width, true); };
+  };
+  new ResizeObserver(fitNames).observe(side);
+}
+
 fetch("/api/config").then(r => r.json()).then(c => { $("#title").textContent = c.project + " agents"; document.title = c.project + " agents"; });
 
 loadRuns().then(() => { const v = visibleRuns()[0]; if (v.length && !current) select(v[0].name); });
