@@ -18,7 +18,7 @@ cp /path/to/agentcontroller/examples/agentcontroller.toml .
 mkdir .agentcontroller && echo ".agentcontroller/" >> .gitignore
 echo "sk-ant-..." > .agentcontroller/api.key        # your API key, never committed
 
-uv tool install /path/to/agentcontroller             # commands: agentctl agentdash agentwatch agentwait agentusage
+uv tool install /path/to/agentcontroller             # commands: agentctl agentdash agentpilot agentwatch agentwait agentusage
 agentdash                                            # http://127.0.0.1:8765/  -> "+ New agent"
 ```
 
@@ -57,11 +57,48 @@ A Claude-themed page (warm cream or dark, terracotta accents, rounded cards) tha
 The runner appends structured events to `<runs>/<name>.events.jsonl` and polls `<runs>/<name>.inbox.jsonl` about once a second.
 `{"text": ...}` lines become user messages; `{"control":"stop"}` ends the run after the current turn. The prompt is a
 **streaming** generator: this is also what keeps the SDK's permission callback (`can_use_tool`) alive. A run ends by itself
-2 s after a result when no message is pending.
+2 s after a result when no message is pending. Background tasks (`run_in_background`) hold the run open until they end
+and the agent has answered their notification; closing the stream earlier breaks every later tool approval ("Stream closed").
+
+## Autopilot (`agentpilot`)
+
+Runs coordinator sessions back to back, each a fresh `claude -p` (like `/clear`), **billed to the Claude plan**
+(`ANTHROPIC_API_KEY` is removed from its environment), in the project root:
+
+```
+agentpilot --sessions 5 --hours 8 [--model opus] [--name pilot-x]
+agentpilot --stop pilot-x          # stop after the current session
+```
+
+- **What each session does:** it gets the project's prompt (`[pilot] prompt_file`, else a default that reads CLAUDE.md and the handoff file), does the next item, commits, pushes, updates the handoff, and ends its final message with `AUTOPILOT: CONTINUE` or `AUTOPILOT: STOP <reason>`.
+- **When it ends:** on a STOP line, on a session that exits non-zero (a usage limit) or lacks the line, at the session or hour limit, or on a stop request.
+- **Background tasks:** `claude -p` waits for them before it exits.
+- **In the dashboard:** the pilot shows up like a run.
+  - **Stop:** ends it after the current session.
+  - **Kill:** ends it now.
+  - **A message:** goes into the next session's prompt as an owner note.
+  - **Cost:** shown as `plan_usd` (the API-equivalent estimate) and never logged as API spend.
+- **Files:** a session's stderr goes to `<runs>/<name>.stderr.txt`.
+- **The prompt goes in on stdin:** on Windows `claude` is a `.cmd` shim, and cmd.exe cuts arguments at newlines.
+
+```toml
+[pilot]
+prompt_file = "briefs/autopilot.md"   # optional; {handoff} is replaced
+handoff = "docs/HANDOFF.md"
+model = "opus"
+permission_mode = "auto"
+```
+
+### Watching from other devices
+
+`agentdash --remote` accepts requests from any host that carries a token. The token is kept in `<secrets>/dash_token.txt`, created on first use. Open `http://<host>:8765/?token=<token>` once per device; after that a cookie (HttpOnly, SameSite=Strict, 30 days) carries it. POSTs must also be same-origin.
+- **LAN:** `agentdash --remote --host 0.0.0.0`. This is plain HTTP, so anyone on the network who can sniff traffic can read the token.
+- **Anywhere:** keep the default host and tunnel it, for example `cloudflared tunnel --url http://127.0.0.1:8765` (HTTPS). Put Cloudflare Access in front if the URL must stay private beyond the token.
 
 ## Security model
 
-- Binds to `127.0.0.1` only; requests need a matching `Host`, and POSTs a matching `Origin` and a JSON content type (blocks DNS rebinding and cross-site forms).
+- Binds to `127.0.0.1` by default; requests need a matching `Host`, and POSTs a matching `Origin` and a JSON content type (blocks DNS rebinding and cross-site forms).
+  With `--remote`, every request needs the token (query or cookie) instead, and POSTs must be same-origin. `--host` other than localhost requires `--remote`.
 - Key files are never read or served by the dashboard. The agent's shell can't mention the secrets dir or key file name,
   `ANTHROPIC_API_KEY`, `curl`/`wget`/`ssh`, `git push/reset --hard/checkout/switch/worktree/clean/rebase/stash`, destructive `rm -r`, `npm install`, ...; add more via `deny`.
 - File writes (`Edit`, `Write`, ...) are confined to the agent's own worktree; `WebFetch`/`WebSearch` are denied.

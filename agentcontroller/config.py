@@ -51,6 +51,11 @@ class Config:
     port: int = 8765
     models: dict = field(default_factory=lambda: dict(DEFAULT_MODELS))
     runner_cmd: list[str] | None = None  # override how the dashboard launches the runner (tests)
+    # agentpilot ([pilot] section)
+    pilot_prompt_file: Path | None = None
+    pilot_handoff: str = "docs/HANDOFF.md"
+    pilot_model: str = "opus"
+    pilot_permission_mode: str = "auto"
 
 
 def find_project(start: Path | None = None) -> Path | None:
@@ -79,7 +84,7 @@ def load(project: str | Path | None = None) -> Config:
         toml = find_project()
     raw = tomllib.loads(toml.read_text(encoding="utf-8")) if toml and toml.is_file() else {}
     root = toml.parent if toml and toml.is_file() else Path.cwd().resolve()
-    paths, budget, agent, dash = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash"))
+    paths, budget, agent, dash, pilot = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash", "pilot"))
 
     def rel(v: str, base: Path = root) -> Path:
         q = Path(os.path.expandvars(v)).expanduser()
@@ -116,5 +121,8 @@ def load(project: str | Path | None = None) -> Config:
         default_effort=agent.get("effort", "medium") or None,
         port=int(dash.get("port", 8765)), models=models,
         runner_cmd=agent.get("runner_cmd"),
+        pilot_prompt_file=rel(pilot["prompt_file"]) if "prompt_file" in pilot else None,
+        pilot_handoff=pilot.get("handoff", "docs/HANDOFF.md"), pilot_model=pilot.get("model", "opus"),
+        pilot_permission_mode=pilot.get("permission_mode", "auto"),
     )
     return cfg

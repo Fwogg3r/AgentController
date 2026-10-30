@@ -13,6 +13,7 @@ agentdash = "agentcontroller.dash:main"
 agentwatch = "agentcontroller.watch:main"
 agentwait = "agentcontroller.wait_primary:main"
 agentusage = "agentcontroller.usage:main"
+agentpilot = "agentcontroller.pilot:main"
 
 [build-system]
 requires = ["hatchling"]

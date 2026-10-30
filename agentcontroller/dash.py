@@ -7,9 +7,11 @@ Writes only inbox/pid/archive files, briefs, and launches/stops agents. Never re
 """
 
 import argparse
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -32,6 +34,8 @@ STALL_SECONDS = 180  # no file activity for this long without an `end` event = s
 
 CFG: Config
 SESSION_START = ""  # ISO timestamp, set in main()
+# --remote: requests from any host are accepted with this token (query ?token= once, then a cookie).
+TOKEN: str | None = None
 
 
 # ---------- files ----------
@@ -329,8 +333,20 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # keep stderr quiet; SSE would flood it
         pass
 
+    def _token_ok(self) -> bool:
+        """--remote: the token from the query or the cookie, and POSTs same-origin."""
+        q = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        cookie = next((c.split("=", 1)[1] for c in self.headers.get("Cookie", "").split("; ")
+                       if c.startswith("ac_token=")), "")
+        if not any(hmac.compare_digest(t, TOKEN) for t in (q, cookie) if t):
+            return False
+        origin = self.headers.get("Origin")
+        return self.command == "GET" or origin is None or urlparse(origin).netloc == self.headers.get("Host", "")
+
     def _local_ok(self) -> bool:
         """Blocks DNS-rebinding and cross-site POSTs: Host and Origin must be this server."""
+        if TOKEN:
+            return self._token_ok()
         port = self.server.server_address[1]
         ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         if self.headers.get("Host", "") not in ok_hosts:
@@ -338,8 +354,10 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin in {f"http://{h}" for h in ok_hosts}
 
-    def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
+    def _send(self, code: int, body: bytes, ctype: str = "application/json", cookie: str | None = None) -> None:
         self.send_response(code)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", ctype + "; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -369,7 +387,10 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         if u.path == "/":
             try:
-                return self._send(200, PAGE.read_bytes(), "text/html")
+                # --remote: the first visit carries ?token=; later requests (fetch, SSE) use the cookie.
+                cookie = (f"ac_token={TOKEN}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
+                          if TOKEN else None)
+                return self._send(200, PAGE.read_bytes(), "text/html", cookie)
             except OSError:
                 return self._json({"ok": False, "error": "static/index.html missing"}, 500)
         if u.path == "/api/runs":
@@ -474,19 +495,34 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> int:
-    global CFG, SESSION_START
+    global CFG, SESSION_START, TOKEN
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--project", help="agentcontroller.toml (or its directory); default: walk up from the cwd")
     ap.add_argument("--port", type=int)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address; 0.0.0.0 for other devices on the LAN (needs --remote)")
+    ap.add_argument("--remote", action="store_true",
+                    help="accept any Host with a token (kept in <secrets>/dash_token.txt); for LAN or a tunnel")
     ap.add_argument("--session-start", help="ISO timestamp for the session spend figure (default: today 00:00)")
     args = ap.parse_args(argv)
     CFG = load(args.project)
     SESSION_START = args.session_start or datetime.now().strftime("%Y-%m-%dT00:00:00")
     port = args.port or CFG.port
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    if args.host not in ("127.0.0.1", "localhost") and not args.remote:
+        ap.error("--host other than 127.0.0.1 needs --remote (token auth)")
+    if args.remote:
+        tok = CFG.secrets / "dash_token.txt"
+        if not tok.exists():
+            CFG.secrets.mkdir(parents=True, exist_ok=True)
+            tok.write_text(secrets.token_urlsafe(24), encoding="utf-8")
+        TOKEN = tok.read_text(encoding="utf-8").strip()
+    srv = ThreadingHTTPServer((args.host, port), Handler)
     srv.daemon_threads = True
     print(f"AgentController dashboard: http://127.0.0.1:{port}/  (project {CFG.root}, runs {CFG.runs})", flush=True)
+    if TOKEN:
+        print(f"Remote access on {args.host}:{port}: open http://<this-host>:{port}/?token=<{CFG.secrets / 'dash_token.txt'}>"
+              " once per device (the token is then kept in a cookie)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
