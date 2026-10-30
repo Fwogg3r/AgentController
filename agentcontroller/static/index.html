@@ -38,6 +38,8 @@ main { flex:1; display:flex; min-height:0; }
 .run .meta { color:var(--muted); font-size:12px; }
 .pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#111; }
 .pill.working { background:var(--ok); } .pill.waiting { background:var(--warn); } .pill.finished { background:var(--muted); }
+.pill.oneshot { background:transparent; border:1px solid var(--accent); color:var(--accent); margin-right:4px; }
+.pill.finished.max_tokens, .pill.finished.refusal { background:var(--warn); }
 .pill.crashed { background:var(--bad); } .pill.ended { background:var(--line); color:var(--muted); }
 .pill.finished.max_turns, .pill.finished.budget { background:var(--warn); } .pill.finished.error { background:var(--bad); }
 .run .act { font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; grid-column:1 / -1; }
@@ -81,6 +83,12 @@ details[open].tool summary::before { content:"v "; }
 details.tool .res { margin:4px 0; white-space:pre-wrap; color:var(--muted); }
 details.tool.err summary { color:var(--bad); }
 .sys { color:var(--muted); font-size:12px; }
+.md { line-height:1.55; padding:2px 0 6px; }
+.md h1,.md h2,.md h3,.md h4 { margin:10px 0 4px; font-size:14px; color:var(--accent); }
+.md p { margin:4px 0; } .md ul,.md ol { margin:4px 0; padding-left:22px; }
+.md pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; overflow:auto; white-space:pre; margin:6px 0; }
+.md code { background:var(--card); padding:0 4px; border-radius:4px; } .md pre code { background:none; padding:0; }
+.promptblk summary { cursor:pointer; color:var(--muted); } .promptblk pre { white-space:pre-wrap; word-break:break-word; margin:4px 0; max-height:40vh; overflow:auto; }
 #composer { border-top:1px solid var(--line); padding:10px 14px; display:flex; flex-direction:column; gap:6px; }
 textarea { width:100%; resize:vertical; min-height:54px; max-height:200px; font:inherit; color:var(--ink); background:var(--card);
   border:1px solid var(--line); border-radius:12px; padding:8px 10px; }
@@ -145,6 +153,9 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
         <label><input type="checkbox" id="f-finished"> finished</label>
         <label><input type="checkbox" id="f-crashed"> crashed</label>
         <label><input type="checkbox" id="f-ended"> ended (no record)</label>
+      </div>
+      <div class="two">
+        <label title="one-shot API calls (agentask) are shown unless this is on"><input type="checkbox" id="f-noneshot"> hide non-agentic</label>
       </div>
       <div class="two">
         <label title="finished/crashed runs quiet for over 24 h stay hidden"><input type="checkbox" id="f-recent"> last 24 h only</label>
@@ -227,18 +238,19 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem("ac." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("ac." + k, JSON.stringify(v)); } catch {} },
 };
-const filt = Object.assign({ name: "", finished: true, crashed: true, ended: false, recent: true, n: 30 }, LS.get("filters", {}));
+const filt = Object.assign({ name: "", finished: true, crashed: true, ended: false, recent: true, noneshot: false, n: 30 }, LS.get("filters", {}));
 $("#f-name").value = filt.name; $("#f-n").value = filt.n;
-for (const k of ["finished", "crashed", "ended", "recent"]) $("#f-" + k).checked = !!filt[k];
+for (const k of ["finished", "crashed", "ended", "recent", "noneshot"]) $("#f-" + k).checked = !!filt[k];
 $("#filters").oninput = () => {
   filt.name = $("#f-name").value.trim(); filt.n = Math.max(1, parseInt($("#f-n").value) || 30);
-  for (const k of ["finished", "crashed", "ended", "recent"]) filt[k] = $("#f-" + k).checked;
+  for (const k of ["finished", "crashed", "ended", "recent", "noneshot"]) filt[k] = $("#f-" + k).checked;
   LS.set("filters", filt); drawRuns();
 };
 function visibleRuns() {
   const out = []; let hidden = 0, kept = 0;
   for (const r of runs) {
     if (filt.name && !r.name.toLowerCase().includes(filt.name.toLowerCase())) { hidden++; continue; }
+    if (r.oneshot && filt.noneshot && r.name !== current) { hidden++; continue; }
     if (r.active || r.name === current) { out.push(r); continue; }  // live runs are never filtered away
     const old = r.idle_seconds > 86400 && (r.state === "finished" || r.state === "crashed");
     if (!filt[r.state] || (filt.recent && old) || kept >= filt.n) { hidden++; continue; }
@@ -330,7 +342,9 @@ function drawRuns() {
     t.append(el("div", "nm", r.name));
     const label = r.outcome && r.outcome !== "success" ? `${r.state} · ${r.outcome.replace("_", " ")}` : r.state === "ended" ? "ended (no record)" : r.state;
     const p = el("span", "pill " + r.state + " " + (r.outcome || ""), label);
-    const m = el("div", "meta", `${(r.model || "?").replace("claude-", "")} · ${usd(r.cost)} · ${r.turns} turns`);
+    const m = el("div", "meta", `${(r.model || "?").replace("claude-", "")} · ${usd(r.cost)} · ` +
+      (r.oneshot ? `${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` : `${r.turns} turns`));
+    if (r.oneshot) t.append(el("span", "pill oneshot", "ask"));
     t.append(p, m);
     d.append(g, t);
     if (r.active) {
@@ -347,17 +361,19 @@ function drawRuns() {
   if (r) {
     const h = $("#runhead"); h.textContent = "";
     const b = el("div"); b.innerHTML = "<b></b> "; b.firstChild.textContent = r.name;
-    b.append(`${r.branch || "-"} · ${r.worktree ? "uncommitted: " + (r.dirty ?? "?") : "no worktree"}${r.legacy ? " · legacy log" : ""}`);
+    b.append(r.oneshot ? `one-shot API call · effort ${r.effort || "?"} · ${usd(r.cost)} · ${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` +
+      `${r.seconds != null ? " · " + dur(r.seconds) : ""}${r.backfilled ? " · imported from usage log" : ""}`
+      : `${r.branch || "-"} · ${r.worktree ? "uncommitted: " + (r.dirty ?? "?") : "no worktree"}${r.legacy ? " · legacy log" : ""}`);
     h.append(b, el("div", "commits mono", (r.commits || []).join("\n")));
     const live = r.active;
     const act = el("div", "actions");
     const btn = (label, cls, fn, off) => { const x = el("button", cls, label); x.disabled = !!off; x.onclick = fn; act.append(x); };
-    btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
+    if (!r.oneshot) btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
       "Terminates the whole process tree immediately. Use only if a graceful stop did not work. The spend so far is logged.",
       () => act2("/api/kill", r.name)), !r.pid_alive);
     btn("Remove from list", "", () => confirmThen("Archive " + r.name + "?",
       "Moves its logs to agent_runs/archive/. The worktree and branch stay.", () => act2("/api/archive", r.name)), live);
-    btn("Delete worktree", "danger", () => deleteWorktree(r.name), live || !r.worktree);
+    if (!r.oneshot) btn("Delete worktree", "danger", () => deleteWorktree(r.name), live || !r.worktree);
     h.append(act);
     $("#send").disabled = $("#stop").disabled = !live;
   }
@@ -372,6 +388,39 @@ function select(name) {
   es.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch {} };
   drawRuns();
 }
+
+// ---- markdown (small, escape-first: headings, fences, lists, bold/italic, inline code) ----
+const escHtml = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function mdInline(s) {
+  return escHtml(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>");
+}
+function mdToHtml(src) {
+  const out = []; let list = null, para = [], fence = null;
+  const endPara = () => { if (para.length) out.push("<p>" + para.map(mdInline).join("<br>") + "</p>"); para = []; };
+  const endList = () => { if (list) out.push("</" + list + ">"); list = null; };
+  for (const raw of src.split("\n")) {
+    if (fence !== null) {
+      if (/^\s*```/.test(raw)) { out.push("<pre><code>" + escHtml(fence) + "</code></pre>"); fence = null; }
+      else fence += (fence ? "\n" : "") + raw;
+      continue;
+    }
+    if (/^\s*```/.test(raw)) { endPara(); endList(); fence = ""; continue; }
+    let m;
+    if ((m = raw.match(/^(#{1,4})\s+(.*)/))) { endPara(); endList(); out.push("<h" + m[1].length + ">" + mdInline(m[2]) + "</h" + m[1].length + ">"); continue; }
+    if ((m = raw.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
+      endPara(); const t = /\d/.test(m[1]) ? "ol" : "ul";
+      if (list !== t) { endList(); out.push("<" + t + ">"); list = t; }
+      out.push("<li>" + mdInline(m[2]) + "</li>"); continue;
+    }
+    if (!raw.trim()) { endPara(); endList(); continue; }
+    endList(); para.push(raw);
+  }
+  if (fence !== null) out.push("<pre><code>" + escHtml(fence) + "</code></pre>");
+  endPara(); endList();
+  return out.join("");
+}
+const curRun = () => runs.find(x => x.name === current);
 
 // ---- transcript ----
 function add(node) {
@@ -396,7 +445,15 @@ function bump(e, a) {
 }
 function render(e) {
   switch (e.kind) {
-    case "text": add(line("", "●", e.text, e.ts)); bump(e, { kind: "thinking", text: "", tokens: acts[current]?.tokens, keepT0: true }); break;
+    case "prompt": {
+      const d = el("details", "promptblk"); d.open = true;
+      const files = (e.files || []).map(f => f.path + " (" + f.bytes + " B)").join(", ");
+      d.append(el("summary", "", "> prompt" + (files ? " · files: " + files : "") + (e.truncated ? " · truncated" : "")), el("pre", "", e.text));
+      add(d); break;
+    }
+    case "text":
+      if (curRun()?.oneshot) { const d = el("div", "md"); d.innerHTML = mdToHtml(e.text); add(d); break; }
+      add(line("", "●", e.text, e.ts)); bump(e, { kind: "thinking", text: "", tokens: acts[current]?.tokens, keepT0: true }); break;
     case "user": add(line("user", ">", e.text, e.ts)); bump(e, { kind: "thinking", text: "" }); break;
     case "thinking": {
       const d = el("details", "think");
@@ -435,7 +492,8 @@ function render(e) {
       break;
     case "retry": add(el("div", "sys", `↻ API retry ${e.attempt}/${e.max_retries}: ${e.error || e.error_status || ""}`)); break;
     case "rate_limit": add(el("div", "sys", `rate limit ${e.status}${e.type ? " (" + e.type + ")" : ""}`)); break;
-    case "start": add(el("div", "sys", `started · ${(e.model || "").replace("claude-", "")} · budget ${usd(e.budget)} · ${e.brief || ""}`)); break;
+    case "start": add(el("div", "sys", e.oneshot ? `one-shot · ${(e.model || "").replace("claude-", "")} · effort ${e.effort || "?"}`
+      : `started · ${(e.model || "").replace("claude-", "")} · budget ${usd(e.budget)} · ${e.brief || ""}`)); break;
     case "result": add(el("div", "sys", `turn done · ${usd(e.cost)} · ${e.turns} turns · ${e.subtype}`)); loadRuns(); break;
     case "end": add(el("div", "sys", e.killed ? "run stopped (killed)" : "run ended")); loadRuns(); break;
   }

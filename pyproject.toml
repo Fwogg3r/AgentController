@@ -5,7 +5,7 @@ description = "Launch, watch and steer budget-capped Claude Agent SDK agents fro
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-dependencies = ["claude-agent-sdk>=0.2.174"]
+dependencies = ["claude-agent-sdk>=0.2.174", "anthropic>=2.3"]
 
 [project.scripts]
 agentctl = "agentcontroller.runner:main"
@@ -14,6 +14,7 @@ agentwatch = "agentcontroller.watch:main"
 agentwait = "agentcontroller.wait_primary:main"
 agentusage = "agentcontroller.usage:main"
 agentpilot = "agentcontroller.pilot:main"
+agentask = "agentcontroller.oneshot:main"
 
 [build-system]
 requires = ["hatchling"]

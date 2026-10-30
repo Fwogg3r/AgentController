@@ -18,7 +18,7 @@ cp /path/to/agentcontroller/examples/agentcontroller.toml .
 mkdir .agentcontroller && echo ".agentcontroller/" >> .gitignore
 echo "sk-ant-..." > .agentcontroller/api.key        # your API key, never committed
 
-uv tool install /path/to/agentcontroller             # commands: agentctl agentdash agentpilot agentwatch agentwait agentusage
+uv tool install /path/to/agentcontroller             # commands: agentctl agentdash agentpilot agentwatch agentwait agentusage agentask
 agentdash                                            # http://127.0.0.1:8765/  -> "+ New agent"
 ```
 
@@ -71,6 +71,18 @@ The runner appends structured events to `<runs>/<name>.events.jsonl` and polls `
 **streaming** generator: this is also what keeps the SDK's permission callback (`can_use_tool`) alive. A run ends by itself
 2 s after a result when no message is pending. Background tasks (`run_in_background`) hold the run open until they end
 and the agent has answered their notification; closing the stream earlier breaks every later tool approval ("Stream closed").
+
+## One-shot calls (`agentask`)
+
+```sh
+agentask "prompt" -f file.rs -m opus -e high -o answer.md   # also: --spend, --backfill
+```
+
+A single Messages API call (key from the configured key file, budget refusal from the cap, `[oneshot]` in
+the toml for the system prompt and default model/effort). Each call is recorded as a run (`kind: oneshot` in
+its `start` event: prompt, attached file names, streamed response, cost, tokens) and in the usage log, so
+`agentdash` lists it with an `ask` badge (sidebar filter "hide non-agentic", off by default) and spend
+totals include it. `--backfill` imports older usage-log lines (idempotent; runs automatically before each call).
 
 ## Autopilot (`agentpilot`)
 

@@ -59,6 +59,10 @@ class Config:
     pilot_handoff: str = "docs/HANDOFF.md"
     pilot_model: str = "opus"
     pilot_permission_mode: str = "auto"
+    # agentask ([oneshot] section)
+    oneshot_system: str = ""
+    oneshot_model: str = "opus"
+    oneshot_effort: str = "high"
 
 
 def find_project(start: Path | None = None) -> Path | None:
@@ -87,7 +91,7 @@ def load(project: str | Path | None = None) -> Config:
         toml = find_project()
     raw = tomllib.loads(toml.read_text(encoding="utf-8")) if toml and toml.is_file() else {}
     root = toml.parent if toml and toml.is_file() else Path.cwd().resolve()
-    paths, budget, agent, dash, pilot = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash", "pilot"))
+    paths, budget, agent, dash, pilot, oneshot = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash", "pilot", "oneshot"))
 
     def rel(v: str, base: Path = root) -> Path:
         q = Path(os.path.expandvars(v)).expanduser()
@@ -128,5 +132,7 @@ def load(project: str | Path | None = None) -> Config:
         pilot_prompt_file=rel(pilot["prompt_file"]) if "prompt_file" in pilot else None,
         pilot_handoff=pilot.get("handoff", "docs/HANDOFF.md"), pilot_model=pilot.get("model", "opus"),
         pilot_permission_mode=pilot.get("permission_mode", "auto"),
+        oneshot_system=oneshot.get("system", ""), oneshot_model=oneshot.get("model", "opus"),
+        oneshot_effort=oneshot.get("effort", "high"),
     )
     return cfg

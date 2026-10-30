@@ -32,7 +32,8 @@ SESSION_RE = re.compile(r"^[\w-]{6,80}$")
 PROTECTED = {"main", "master", "develop", "trunk"}
 # A run without a PID file (from before the runner wrote one) that has been quiet this long is over.
 STALL_SECONDS = 180
-OUTCOMES = {"success": "success", "error_max_turns": "max_turns", "error_max_budget_usd": "budget"}
+OUTCOMES = {"success": "success", "error_max_turns": "max_turns", "error_max_budget_usd": "budget",
+            "max_tokens": "max_tokens", "refusal": "refusal"}
 
 CFG: Config
 SESSION_START = ""  # ISO timestamp, set in main()
@@ -179,7 +180,7 @@ def event_state(events: list[dict]) -> dict:
             st["retry"] = e
         elif k == "rate_limit":
             st["rate_limit"] = e if e.get("status") == "rejected" else None
-        elif k not in ("session", "task"):  # task events arrive between turns
+        elif k not in ("session", "task", "cost"):  # task and cost events arrive between turns
             st["last"] = e
             if k in ("tool", "tool_result", "text", "result", "user"):
                 st["progress"] = st["retry"] = None
@@ -263,7 +264,7 @@ def derive_state(name: str, events: list[dict], alive: bool, has_pid: bool, idle
 def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
     events = read_jsonl(CFG.runs / f"{name}.events.jsonl")
     info = {"name": name, "model": None, "cost": 0.0, "turns": 0, "worktree": None, "branch": None, "base": None,
-            "budget": None, "legacy": not events, "commits": [], "dirty": None}
+            "budget": None, "legacy": not events, "commits": [], "dirty": None, "oneshot": False}
     activity = last_activity(name)
     idle = time.time() - activity
     has_pid = pid_file(name).exists()
@@ -274,8 +275,14 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
                 info.update(model=e.get("model"), worktree=e.get("worktree"), branch=e.get("branch"),
                             base=e.get("base"), budget=e.get("budget"))
                 info["ended"] = False  # a resumed run appends a new `start`
+                if e.get("oneshot"):  # agentask: one Messages API call, no worktree
+                    info.update(oneshot=True, effort=e.get("effort"), backfilled=bool(e.get("backfilled")))
             elif e["kind"] == "result":
                 info["cost"], info["turns"] = e.get("cost", 0.0), e.get("turns", 0)
+                if info["oneshot"]:
+                    info.update(tokens_in=e.get("input_tokens"), tokens_out=e.get("output_tokens"), seconds=e.get("seconds"))
+            elif e["kind"] == "cost":  # live estimate between results (runner.CostMeter)
+                info["cost"], info["turns"] = e.get("usd", info["cost"]), e.get("turns", info["turns"])
             elif e["kind"] == "end":
                 info["ended"] = True
         info["started"] = events[0].get("ts")

@@ -154,6 +154,60 @@ class Progress:
         self.events.write("progress", **rec)
 
 
+# USD per million tokens (input, output) by model family. Only the live estimate uses this; the
+# ResultMessage's total_cost_usd replaces it at the end of each turn. Unknown models price high.
+PRICES = {"opus": (4.0, 20.0), "fable": (10.0, 50.0), "sonnet": (2.0, 10.0), "haiku": (0.10, 0.50)}
+CACHE_WRITE, CACHE_READ = 1.25, 0.10  # multipliers on the input price
+
+
+def call_usd(model: str, u: dict) -> float:
+    p_in, p_out = next((p for k, p in PRICES.items() if k in (model or "")), (10.0, 50.0))
+    tokens_in = (u.get("input_tokens", 0) + CACHE_WRITE * u.get("cache_creation_input_tokens", 0)
+                 + CACHE_READ * u.get("cache_read_input_tokens", 0))
+    return (tokens_in * p_in + u.get("output_tokens", 0) * p_out) / 1e6
+
+
+class CostMeter:
+    """Live cost between results, from the usage in the stream's message_start / message_delta.
+
+    The SDK reports cost only in ResultMessage, which an agent working through one long brief sends
+    once, at the end. Emits `cost` events (usd = last result's cost + this estimate, turns = last
+    result's turns + main-thread API calls since) at most every PROGRESS_EVERY seconds.
+    """
+
+    def __init__(self, events: EventLog):
+        self.events = events
+        self.base_usd, self.base_turns = 0.0, 0
+        self.last_emit = 0.0
+        self.reset()
+
+    def reset(self) -> None:
+        self.done_usd, self.calls = 0.0, 0
+        self.open: dict[str, tuple[str, dict]] = {}  # stream (parent tool id or "") -> (model, usage)
+
+    def on_result(self, usd: float, turns: int) -> None:
+        self.base_usd, self.base_turns = usd, turns
+        self.reset()
+
+    def on_event(self, ev: dict, stream: str) -> None:
+        t = ev.get("type")
+        if t == "message_start":
+            m = ev.get("message") or {}
+            self.open[stream] = (m.get("model") or "", dict(m.get("usage") or {}))
+            if not stream:
+                self.calls += 1
+        elif t == "message_delta" and stream in self.open:
+            self.open[stream][1].update({k: v for k, v in (ev.get("usage") or {}).items() if isinstance(v, int)})
+        elif t == "message_stop" and stream in self.open:
+            self.done_usd += call_usd(*self.open.pop(stream))
+        else:
+            return
+        if time.time() - self.last_emit >= PROGRESS_EVERY or t == "message_stop":
+            self.last_emit = time.time()
+            usd = self.done_usd + sum(call_usd(m, u) for m, u in self.open.values())
+            self.events.write("cost", usd=round(self.base_usd + usd, 4), turns=self.base_turns + self.calls)
+
+
 def user_msg(text: str) -> dict:
     return {"type": "user", "message": {"role": "user", "content": text}, "parent_tool_use_id": None}
 
@@ -242,6 +296,7 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
     result, key_source = {}, "unknown"
     session = Session(brief, inbox, events)
     progress = Progress(events)
+    meter = CostMeter(events)
 
     def say(text: str) -> None:
         print(text, file=sys.stderr, flush=True)
@@ -257,6 +312,7 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
                 say(f"[session] {msg.data.get('session_id')}")
                 events.write("session", session_id=msg.data.get("session_id"))
             elif isinstance(msg, StreamEvent):
+                meter.on_event(msg.event, msg.parent_tool_use_id or "")  # subagents cost too
                 if msg.parent_tool_use_id is None:  # subagents' streams would interleave with the main one
                     progress.on_event(msg.event)
             elif isinstance(msg, RateLimitEvent):
@@ -303,6 +359,7 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
                 }
                 events.write("result", cost=result["total_cost_usd"], turns=msg.num_turns, subtype=msg.subtype)
                 progress.reset_turn()
+                meter.on_result(result["total_cost_usd"], msg.num_turns or 0)
                 session.on_result()
                 if msg.subtype != "success":
                     break  # budget/turn cap: no point waiting for more input
