@@ -16,6 +16,17 @@ DEFAULT_RULES = """You are a headless engineering agent billed to an API budget.
 Work only inside this worktree; commit your work here in logical commits. Never push.
 Be economical with tokens: read files in targeted ranges, avoid re-reading, batch edits.
 Finish with a concise report: what you built, test results, deviations, risks, next steps."""
+# Always appended (after the project's rules). Cost is dominated by re-reading the whole
+# context every turn (cache reads ~ turns x context size), so the levers are fewer turns,
+# a smaller context, and handing off to a fresh agent instead of growing one session.
+ECONOMY_RULES = """Token economy (you are billed per token; every token you add is re-read on every later turn):
+- Keep tool output small: quiet builds/tests (e.g. `cargo build -q`, `cargo test -q 2>&1 | tail -20`), grep/tail long output, never dump whole logs.
+- Read files in targeted line ranges; grep first. Do not re-read files you already have.
+- Issue independent tool calls in the same turn. Batch edits.
+- View screenshots only when needed, at the smallest size that answers the question.
+- Turn budget: about {soft} turns. If you get there (or your context is large) before finishing:
+  commit what works, write HANDOFF-{name}.md at the worktree root (done / in progress / next steps / gotchas),
+  commit it, and end with a short report. A fresh agent will continue from that file."""
 CONFIG_NAME = "agentcontroller.toml"
 
 
@@ -35,7 +46,8 @@ class Config:
     rules: str = DEFAULT_RULES
     default_model: str = "sonnet"
     default_base: str = "main"
-    default_max_turns: int = 250
+    default_max_turns: int = 80
+    default_effort: str | None = "medium"
     port: int = 8765
     models: dict = field(default_factory=lambda: dict(DEFAULT_MODELS))
     runner_cmd: list[str] | None = None  # override how the dashboard launches the runner (tests)
@@ -100,7 +112,8 @@ def load(project: str | Path | None = None) -> Config:
         usage_log=secrets / paths.get("usage_log", "api_usage.jsonl"),
         deny=list(agent.get("deny", [])), path_extra=[str(rel(x)) for x in agent.get("path", [])],
         rules=agent.get("rules", DEFAULT_RULES), default_model=agent.get("default_model", "sonnet"),
-        default_base=agent.get("default_base", "main"), default_max_turns=int(agent.get("max_turns", 250)),
+        default_base=agent.get("default_base", "main"), default_max_turns=int(agent.get("max_turns", 80)),
+        default_effort=agent.get("effort", "medium") or None,
         port=int(dash.get("port", 8765)), models=models,
         runner_cmd=agent.get("runner_cmd"),
     )

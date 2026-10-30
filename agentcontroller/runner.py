@@ -20,7 +20,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, PermissionRe
                               ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage,
                               query)
 
-from .config import Config, load
+from .config import ECONOMY_RULES, Config, load
 
 IDLE_GRACE = 2.0  # seconds to wait after the last result for an inbox message before ending
 
@@ -204,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", help="model alias from the config")
     ap.add_argument("--budget", type=float, help="hard USD cap for this run")
     ap.add_argument("--max-turns", type=int)
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], help="default from config (medium)")
     ap.add_argument("--resume", help="session id to continue (the brief becomes the follow-up message)")
     ap.add_argument("--no-textlog", action="store_true", help="don't write <name>.log (stderr is redirected there)")
     ap.add_argument("--check-policy", action="store_true", help="self-test the deny list and exit")
@@ -238,15 +239,18 @@ def main(argv: list[str] | None = None) -> int:
         subprocess.run(["git", "worktree", "add", str(wt), "-b", args.name, base], cwd=cfg.root, check=True)
 
     key_file = cfg.key_file.as_posix()
+    max_turns = args.max_turns or cfg.default_max_turns
     options = ClaudeAgentOptions(
         model=model_id,
         cwd=str(wt),
-        max_turns=args.max_turns or cfg.default_max_turns,
+        max_turns=max_turns,
+        effort=args.effort or cfg.default_effort,
         max_budget_usd=args.budget,
         permission_mode="default",  # every non-read tool call reaches `approve`
         allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
         can_use_tool=make_approver(wt, patterns),
-        system_prompt={"type": "preset", "preset": "claude_code", "append": cfg.rules},
+        system_prompt={"type": "preset", "preset": "claude_code",
+                       "append": cfg.rules + "\n\n" + ECONOMY_RULES.format(soft=max(10, max_turns - 10), name=args.name)},
         setting_sources=["project"],  # loads the worktree's CLAUDE.md
         # apiKeyHelper is used without the interactive approval an env var needs, and keeps
         # the key scoped to this child process.
