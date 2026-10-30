@@ -48,6 +48,9 @@ class Config:
     default_base: str = "main"
     default_max_turns: int = 80
     default_effort: str | None = "medium"
+    # "summarized" asks the CLI to return thinking text (newer models default to signature only).
+    # Display only: it doesn't enable thinking or change how many thinking tokens are billed.
+    thinking_display: str | None = None
     port: int = 8765
     models: dict = field(default_factory=lambda: dict(DEFAULT_MODELS))
     runner_cmd: list[str] | None = None  # override how the dashboard launches the runner (tests)
@@ -119,6 +122,7 @@ def load(project: str | Path | None = None) -> Config:
         rules=agent.get("rules", DEFAULT_RULES), default_model=agent.get("default_model", "sonnet"),
         default_base=agent.get("default_base", "main"), default_max_turns=int(agent.get("max_turns", 80)),
         default_effort=agent.get("effort", "medium") or None,
+        thinking_display=agent.get("thinking_display") or None,
         port=int(dash.get("port", 8765)), models=models,
         runner_cmd=agent.get("runner_cmd"),
         pilot_prompt_file=rel(pilot["prompt_file"]) if "prompt_file" in pilot else None,

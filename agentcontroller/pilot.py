@@ -106,7 +106,7 @@ def run_session(cmd: list[str], prompt: str, cfg: Config, env: dict, events: Eve
                 if block.get("type") == "text" and block.get("text", "").strip():
                     events.write("text", text=block["text"].strip())
                 elif block.get("type") == "tool_use":
-                    events.write("tool", name=block.get("name"), arg=short_arg(block.get("input") or {}))
+                    events.write("tool", id=block.get("id"), name=block.get("name"), arg=short_arg(block.get("input") or {}))
         elif t == "user":
             content = msg.get("message", {}).get("content")
             for block in content if isinstance(content, list) else []:
@@ -114,7 +114,8 @@ def run_session(cmd: list[str], prompt: str, cfg: Config, env: dict, events: Eve
                     c = block.get("content")
                     if isinstance(c, list):
                         c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-                    events.write("tool_result", ok=not block.get("is_error"), text=str(c or "")[:300])
+                    events.write("tool_result", id=block.get("tool_use_id"), ok=not block.get("is_error"),
+                                 text=str(c or "")[:300])
         elif t == "result":
             result = msg
     proc.wait()

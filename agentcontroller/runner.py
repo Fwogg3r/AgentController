@@ -17,8 +17,9 @@ import time
 from pathlib import Path
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, PermissionResultAllow, PermissionResultDeny,
-                              ResultMessage, SystemMessage, TaskNotificationMessage, TaskStartedMessage,
-                              TaskUpdatedMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, query)
+                              RateLimitEvent, ResultMessage, StreamEvent, SystemMessage, TaskNotificationMessage,
+                              TaskStartedMessage, TaskUpdatedMessage, TextBlock, ThinkingBlock, ToolResultBlock,
+                              ToolUseBlock, UserMessage, query)
 from claude_agent_sdk.types import TERMINAL_TASK_STATUSES
 
 from .config import ECONOMY_RULES, Config, load
@@ -27,6 +28,7 @@ IDLE_GRACE = 2.0  # seconds to wait after the last result for an inbox message b
 # After the last background task ends, the CLI starts a turn on its notification. Wait this long for
 # that turn's result; if the notification was absorbed by a turn already running, none comes.
 FOLLOWUP_GRACE = 120.0
+PROGRESS_EVERY = 2.0  # seconds between `progress` events; stream deltas arrive many times a second
 
 # Static allow-patterns proved unreliable headless, so every tool call goes through `approve`:
 # allow by default, deny dangerous shell patterns, confine file writes to the agent's worktree.
@@ -89,6 +91,67 @@ def short_arg(inp: dict) -> str:
         if inp.get(k):
             return str(inp[k]).replace("\n", " ")[:160]
     return json.dumps(inp, ensure_ascii=False)[:160]
+
+
+class Progress:
+    """Turns the SDK's partial stream events into throttled `progress` events for the dashboard.
+
+    Each one carries the phase of the model turn (thinking / text / tool_input), the tool being
+    written, output tokens so far in this turn (estimated from delta sizes until the API's own
+    count arrives with message_delta) and, for thinking, the tail of the thinking text when the
+    model returns it (newer models return signatures only unless thinking_display="summarized").
+    """
+
+    def __init__(self, events: EventLog):
+        self.events = events
+        self.last_emit = 0.0
+        self.dirty = False
+        self.reset_turn()
+
+    def reset_turn(self) -> None:
+        self.turn_tokens = 0  # output tokens of the API calls finished in this turn
+        self.call_chars, self.call_tokens = 0, 0
+        self.phase, self.tool, self.excerpt = None, None, ""
+
+    def tokens(self) -> int:
+        return self.turn_tokens + max(self.call_tokens, self.call_chars // 4)
+
+    def on_event(self, ev: dict) -> None:
+        t = ev.get("type")
+        if t == "message_start":
+            self.call_chars, self.call_tokens = 0, 0
+        elif t == "content_block_start":
+            cb = ev.get("content_block") or {}
+            kind = cb.get("type")
+            self.phase = {"thinking": "thinking", "redacted_thinking": "thinking", "text": "text",
+                          "tool_use": "tool_input", "server_tool_use": "tool_input"}.get(kind, kind)
+            self.tool = cb.get("name") if self.phase == "tool_input" else None
+            if self.phase == "thinking":
+                self.excerpt = ""
+            self.dirty = True
+        elif t == "content_block_delta":
+            d = ev.get("delta") or {}
+            piece = d.get("thinking") or d.get("text") or d.get("partial_json") or ""
+            self.call_chars += len(piece)
+            if d.get("type") == "thinking_delta" and piece:
+                self.excerpt = (self.excerpt + piece)[-240:]
+            self.dirty = True
+        elif t == "message_delta":
+            self.call_tokens = (ev.get("usage") or {}).get("output_tokens") or self.call_tokens
+        elif t == "message_stop":
+            self.turn_tokens += max(self.call_tokens, self.call_chars // 4)
+            self.call_chars, self.call_tokens = 0, 0
+        if self.dirty and time.time() - self.last_emit >= PROGRESS_EVERY:
+            self.emit()
+
+    def emit(self) -> None:
+        self.last_emit, self.dirty = time.time(), False
+        rec = {"phase": self.phase, "tokens": self.tokens()}
+        if self.tool:
+            rec["tool"] = self.tool
+        if self.phase == "thinking" and self.excerpt.strip():
+            rec["excerpt"] = " ".join(self.excerpt.split())[-200:]
+        self.events.write("progress", **rec)
 
 
 def user_msg(text: str) -> dict:
@@ -178,6 +241,7 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
     """Streams the run; returns the last result fields (cost is cumulative) + key source."""
     result, key_source = {}, "unknown"
     session = Session(brief, inbox, events)
+    progress = Progress(events)
 
     def say(text: str) -> None:
         print(text, file=sys.stderr, flush=True)
@@ -192,6 +256,17 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
                 # Printed immediately so a crashed run can be resumed with --resume.
                 say(f"[session] {msg.data.get('session_id')}")
                 events.write("session", session_id=msg.data.get("session_id"))
+            elif isinstance(msg, StreamEvent):
+                if msg.parent_tool_use_id is None:  # subagents' streams would interleave with the main one
+                    progress.on_event(msg.event)
+            elif isinstance(msg, RateLimitEvent):
+                i = msg.rate_limit_info
+                events.write("rate_limit", status=i.status, resets_at=i.resets_at, type=i.rate_limit_type)
+            elif isinstance(msg, SystemMessage) and msg.subtype == "api_retry":
+                d = msg.data
+                events.write("retry", attempt=d.get("attempt"), max_retries=d.get("max_retries"),
+                             delay_ms=d.get("retry_delay_ms"), error_status=d.get("error_status"),
+                             error=str(d.get("error") or "")[:200])
             elif isinstance(msg, TaskStartedMessage):
                 session.task_started(msg.task_id)
                 events.write("task", id=msg.task_id, status="started", text=msg.description)
@@ -208,15 +283,18 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
                     if isinstance(block, TextBlock) and block.text.strip():
                         say(block.text.strip()[:400])
                         events.write("text", text=block.text.strip())
+                    elif isinstance(block, ThinkingBlock) and block.thinking.strip():
+                        events.write("thinking", text=block.thinking.strip()[:1000])
                     elif isinstance(block, ToolUseBlock):
-                        events.write("tool", name=block.name, arg=short_arg(block.input or {}))
+                        events.write("tool", id=block.id, name=block.name, arg=short_arg(block.input or {}))
             elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                 for block in msg.content:
                     if isinstance(block, ToolResultBlock):
                         c = block.content
                         if isinstance(c, list):
                             c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-                        events.write("tool_result", ok=not block.is_error, text=str(c or "")[:300])
+                        events.write("tool_result", id=block.tool_use_id, ok=not block.is_error,
+                                     text=str(c or "")[:300])
             elif isinstance(msg, ResultMessage):
                 result = {
                     "subtype": msg.subtype, "result": msg.result, "total_cost_usd": msg.total_cost_usd or 0.0,
@@ -224,6 +302,7 @@ async def run_agent(brief: str, options: "ClaudeAgentOptions", events: EventLog,
                     "is_error": msg.is_error, "api_error_status": msg.api_error_status,
                 }
                 events.write("result", cost=result["total_cost_usd"], turns=msg.num_turns, subtype=msg.subtype)
+                progress.reset_turn()
                 session.on_result()
                 if msg.subtype != "success":
                     break  # budget/turn cap: no point waiting for more input
@@ -243,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--budget", type=float, help="hard USD cap for this run")
     ap.add_argument("--max-turns", type=int)
     ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"], help="default from config (medium)")
+    ap.add_argument("--thinking-display", choices=["summarized", "omitted"],
+                    help="return thinking text for the dashboard (display only; default from config)")
     ap.add_argument("--resume", help="session id to continue (the brief becomes the follow-up message)")
     ap.add_argument("--no-textlog", action="store_true", help="don't write <name>.log (stderr is redirected there)")
     ap.add_argument("--check-policy", action="store_true", help="self-test the deny list and exit")
@@ -297,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
         max_buffer_size=64 * 1024 * 1024,
         env={"PATH": os.pathsep.join([*cfg.path_extra, os.environ.get("PATH", "")])},
         resume=args.resume,
+        include_partial_messages=True,  # feeds `progress` events; the stream itself is not logged
+        extra_args={"thinking-display": td} if (td := args.thinking_display or cfg.thinking_display) else {},
     )
     start = time.time()
     cfg.runs.mkdir(parents=True, exist_ok=True)
