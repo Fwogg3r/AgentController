@@ -10,7 +10,50 @@ Promotional and API credits are billed against **API / Agent SDK usage**. Claude
 the plan instead. Running agents through the SDK with an API key bills exactly the budget you capped. The key is passed
 through `apiKeyHelper` to the agent process only; it is never put in a global `ANTHROPIC_API_KEY`.
 
-## Quick start (new project)
+## Quick start (one command)
+
+Needs [uv](https://docs.astral.sh/uv/getting-started/installation/), git and Claude Code. Windows, macOS and Linux.
+
+```sh
+git clone https://github.com/Fwogg3r/AgentController
+cd AgentController
+uv run install.py --init /path/to/your/project      # asks for your Anthropic API key once (hidden input)
+```
+
+Then restart Claude Code. The installer:
+
+| What | Where |
+|---|---|
+| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
+| **`/api-request`** skill: one-shot asks and design debates with another model, background API agents, dashboard, spend | `~/.claude/skills/api-request/` (`SKILL.md` + `ask_api.py`) |
+| **`/batchy`** skill + `claude-batch` MCP server: non-urgent work through the Message Batches API at 50% off | Fetched from [s2-streamstore/claude-batch-toolkit](https://github.com/s2-streamstore/claude-batch-toolkit) at a pinned commit into `~/.claude/skills/batchy/` and `~/.claude/mcp/`, registered in `~/.claude.json` |
+| With `--init PATH`: `agentcontroller.toml`, a gitignored `.agentcontroller/`, your key in `.agentcontroller/api.key` | the project |
+
+The API key never goes into a global `ANTHROPIC_API_KEY`: if it did, Claude Code itself would bill the API instead of
+your plan. The batch MCP server gets it in its own `env` entry, and the agents get it through `apiKeyHelper`.
+Every file the installer overwrites under `~/.claude` is backed up to `<file>.bak` first.
+
+The key it asks for is a normal API key (`sk-ant-api…`); admin keys can't make Messages calls. The dashboard's costs
+and the budget cap come from the runs' own estimates, so no admin key is needed. Optional: put an admin key in
+`.agentcontroller/admin.key` (`admin_key_file` in the toml) for `agentusage`, which reports actual billed spend from
+the Admin API (organisation-wide, daily, hours of lag; `--by-key` splits tokens per key). It doesn't feed the dashboard.
+
+Options: `--key-file F` (read the key from a file), `--dry-run`, `-y` (no prompts), `--no-batchy`, `--no-tool`,
+`--statusline` (the toolkit's batch status line; this also writes the key to `~/.claude/env`, which only that
+script sources), `--uninstall` (removes the skills, the MCP entry and the tool; keeps `~/.claude/batches`).
+
+In Claude Code:
+
+- `/api-request should we use a BVH or a uniform grid here? ask opus` - one-shot call, recorded in the dashboard.
+- `/api-request agent: implement the brief in briefs/x.md` - a budget-capped agent in its own worktree.
+- `/batchy review src/ for security issues` - submitted to the Batch API; `/batchy check` later.
+- `agentdash` in a terminal - http://127.0.0.1:8765/ shows runs, costs, steering and your Claude Code sessions.
+
+The skill is called `api-request`, not `claude-api`, because Claude Code ships a built-in `claude-api` skill
+(the SDK reference). `ask_api.py` works without the tool installed (it falls back to `uvx` from GitHub):
+`uv run ~/.claude/skills/api-request/ask_api.py "prompt" -f file -m opus`.
+
+## Manual setup (new project)
 
 ```sh
 # in your project repo
