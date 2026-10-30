@@ -147,8 +147,11 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
         done = (CFG.runs / f"{name}.json").exists()
         info["status"] = "finished" if done else ("running" if idle < STALL_SECONDS else "stalled")
         info["started"] = None
-    if alive and info["status"] == "stalled":
-        info["status"] = "running"  # alive but quiet (long tool call); the PID is the better signal
+    # With a PID file (every run since the runner writes its own) the process state decides:
+    # alive = running, even through a long quiet tool call; dead without `end` = dead.
+    # Only runs without a PID file fall back to the file-activity guess ("stalled").
+    if info["status"] != "finished" and pid_file(name).exists():
+        info["status"] = "running" if alive else "dead"
     info["pid_alive"] = alive
     info["idle_seconds"] = round(idle)
     wt = info["worktree"] or str(CFG.worktrees / name)

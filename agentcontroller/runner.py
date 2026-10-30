@@ -258,6 +258,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     start = time.time()
     cfg.runs.mkdir(parents=True, exist_ok=True)
+    # Every run records its own PID (not just dashboard launches), so the dashboard can tell
+    # a quiet-but-alive run from a dead one. A hard kill skips the `finally`, leaving the
+    # file behind with a dead PID and no `end` event, which the dashboard reports as "dead".
+    (cfg.runs / f"{args.name}.pid").write_text(str(os.getpid()))
     events = EventLog(cfg.runs / f"{args.name}.events.jsonl")
     events.write("start", model=model_id, budget=args.budget, session_id=args.resume, brief=Path(args.brief).name,
                  worktree=str(wt), branch=args.name, base=base)

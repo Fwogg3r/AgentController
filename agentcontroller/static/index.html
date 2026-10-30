@@ -39,7 +39,7 @@ main { flex:1; display:flex; min-height:0; }
 .run .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .run .meta { color:var(--muted); font-size:12px; }
 .pill { display:inline-block; font-size:11px; padding:0 7px; border-radius:20px; color:#fff; }
-.pill.running { background:var(--ok); } .pill.finished { background:var(--muted); } .pill.stalled { background:var(--warn); }
+.pill.running { background:var(--ok); } .pill.finished { background:var(--muted); } .pill.stalled { background:var(--warn); } .pill.dead { background:var(--bad); }
 #pane { flex:1; display:flex; flex-direction:column; min-width:0; }
 #runhead { padding:8px 14px; border-bottom:1px solid var(--line); font-size:12.5px; color:var(--muted); }
 #runhead b { color:var(--ink); }
@@ -86,6 +86,8 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
 .clawd.finished .zz { display:block; fill:var(--muted); animation:zz 2.4s ease-in-out infinite; }
 .clawd.stalled .bang { display:block; fill:var(--bad); }
 .clawd.stalled { filter:saturate(.5); }
+.clawd.dead .bang { display:block; fill:var(--bad); }
+.clawd.dead { filter:grayscale(.85); opacity:.7; }
 @keyframes bob { 50% { transform:translateY(-2px); } }
 @keyframes step { 50% { transform:translateY(-1px); } }
 @keyframes zz { 50% { opacity:.3; transform:translateY(-1px); } }
