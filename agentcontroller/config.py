@@ -63,6 +63,8 @@ class Config:
     oneshot_system: str = ""
     oneshot_model: str = "opus"
     oneshot_effort: str = "high"
+    # Claude Code transcripts shown as plan sessions ([claude] section); None = derive from the project root
+    claude_projects_dir: Path | None = None
 
 
 def find_project(start: Path | None = None) -> Path | None:
@@ -91,7 +93,7 @@ def load(project: str | Path | None = None) -> Config:
         toml = find_project()
     raw = tomllib.loads(toml.read_text(encoding="utf-8")) if toml and toml.is_file() else {}
     root = toml.parent if toml and toml.is_file() else Path.cwd().resolve()
-    paths, budget, agent, dash, pilot, oneshot = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash", "pilot", "oneshot"))
+    paths, budget, agent, dash, pilot, oneshot, claude = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash", "pilot", "oneshot", "claude"))
 
     def rel(v: str, base: Path = root) -> Path:
         q = Path(os.path.expandvars(v)).expanduser()
@@ -134,5 +136,6 @@ def load(project: str | Path | None = None) -> Config:
         pilot_permission_mode=pilot.get("permission_mode", "auto"),
         oneshot_system=oneshot.get("system", ""), oneshot_model=oneshot.get("model", "opus"),
         oneshot_effort=oneshot.get("effort", "high"),
+        claude_projects_dir=rel(claude["projects_dir"]) if "projects_dir" in claude else None,
     )
     return cfg
