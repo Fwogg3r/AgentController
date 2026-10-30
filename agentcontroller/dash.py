@@ -30,7 +30,9 @@ NAME_RE = re.compile(r"^[\w.-]+$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 SESSION_RE = re.compile(r"^[\w-]{6,80}$")
 PROTECTED = {"main", "master", "develop", "trunk"}
-STALL_SECONDS = 180  # no file activity for this long without an `end` event = stalled
+# A run without a PID file (from before the runner wrote one) that has been quiet this long is over.
+STALL_SECONDS = 180
+OUTCOMES = {"success": "success", "error_max_turns": "max_turns", "error_max_budget_usd": "budget"}
 
 CFG: Config
 SESSION_START = ""  # ISO timestamp, set in main()
@@ -126,12 +128,146 @@ def last_activity(name: str) -> float:
     return max(ts, default=0.0)
 
 
+def log_tail(name: str) -> str:
+    """Last non-empty line of <name>.log (read from the end: logs can be large)."""
+    p = CFG.runs / f"{name}.log"
+    try:
+        with p.open("rb") as fh:
+            fh.seek(max(0, p.stat().st_size - 4096))
+            lines = [l for l in fh.read().decode("utf-8", errors="replace").splitlines() if l.strip()]
+        return lines[-1][:300] if lines else ""
+    except OSError:
+        return ""
+
+
+def event_state(events: list[dict]) -> dict:
+    """What the last session (since the last `start`) was doing where its events stop.
+
+    Older event files have no tool ids; their tools pair with results in order.
+    """
+    fresh = lambda: {"tools": {}, "tasks": {}, "result": None, "ended": False, "killed": False, "progress": None,
+                     "last": None, "retry": None, "rate_limit": None, "pending_user": 0, "task_closed_at": None}
+    st, anon = fresh(), 0
+    for e in events:
+        k = e.get("kind")
+        if k == "start":
+            st = fresh()
+        elif k == "tool":
+            tid = e.get("id")
+            if not tid:
+                tid, anon = f"_{anon}", anon + 1
+            st["tools"][tid] = e
+        elif k == "tool_result":
+            tid = e.get("id") or next((t for t in st["tools"] if t.startswith("_")), None)
+            st["tools"].pop(tid, None)
+        elif k == "task":
+            if e.get("status") == "started":
+                st["tasks"][e.get("id")] = e
+            elif st["tasks"].pop(e.get("id"), None) is not None and not st["tasks"]:
+                st["task_closed_at"] = e.get("ts")
+        elif k == "result":
+            st["result"] = e.get("subtype")
+            st["tools"] = {}  # a finished turn has nothing in flight (a cancelled call never gets a result)
+            st["pending_user"] = max(0, st["pending_user"] - 1)
+        elif k == "user":
+            st["pending_user"] += 1
+        elif k == "end":
+            st["ended"], st["killed"] = True, bool(e.get("killed"))
+        if k == "progress":
+            st["progress"] = e
+        elif k == "retry":
+            st["retry"] = e
+        elif k == "rate_limit":
+            st["rate_limit"] = e if e.get("status") == "rejected" else None
+        elif k not in ("session", "task"):  # task events arrive between turns
+            st["last"] = e
+            if k in ("tool", "tool_result", "text", "result", "user"):
+                st["progress"] = st["retry"] = None
+    return st
+
+
+def outcome_of(subtype: str | None) -> str:
+    return OUTCOMES.get(subtype or "", "error")
+
+
+def describe(e: dict | None) -> str:
+    if not e:
+        return ""
+    if e.get("kind") == "tool":
+        return f"{e.get('name')}: {e.get('arg', '')}"[:200]
+    if e.get("kind") == "result":
+        return f"result {e.get('subtype')}"
+    return f"{e.get('kind')}: {str(e.get('text') or '')[:200]}".strip()
+
+
+def derive_state(name: str, events: list[dict], alive: bool, has_pid: bool, idle: float) -> dict:
+    """state: working | waiting | finished | crashed | ended, with `outcome` or `activity` (kind, text, since).
+
+    `status` (running | finished | dead | ended) is kept for older clients and scripts.
+    """
+    def out(state: str, status: str, outcome: str | None = None, **activity) -> dict:
+        return {"state": state, "status": status, "outcome": outcome, "activity": activity or None}
+
+    if not events:  # legacy run: only a .log (and a .json once it finished)
+        res = CFG.runs / f"{name}.json"
+        if res.exists():
+            try:
+                sub = json.loads(res.read_text(encoding="utf-8")).get("subtype")
+            except (OSError, ValueError, AttributeError):
+                sub = None
+            return out("finished", "finished", outcome_of(sub) if sub else "success")
+        if alive or idle < STALL_SECONDS:
+            return out("working", "running", kind="thinking", text="", since=None)
+        return out("ended", "ended", "no_record", kind="ended", text=log_tail(name) or "no result file, no events log")
+
+    st = event_state(events)
+    if st["ended"]:
+        return out("finished", "finished", "stopped" if st["killed"] else outcome_of(st["result"]))
+    last = st["last"] or {}
+    if not (alive if has_pid else idle < STALL_SECONDS):
+        return out("crashed", "dead", kind="crashed", text=describe(st["last"]), log=log_tail(name),
+                   since=last.get("ts"))
+    prog = st["progress"] or {}
+    tokens = prog.get("tokens")
+    if st["rate_limit"]:
+        rl = st["rate_limit"]
+        return out("waiting", "running", kind="rate_limit", text=f"rate limited ({rl.get('type') or 'API'})",
+                   since=rl.get("ts"), resets_at=rl.get("resets_at"))
+    if st["retry"]:
+        r = st["retry"]
+        return out("waiting", "running", kind="retry", since=r.get("ts"), delay_ms=r.get("delay_ms"),
+                   text=f"API retry {r.get('attempt')}/{r.get('max_retries')}: {r.get('error') or r.get('error_status')}")
+    if st["tools"]:
+        tools = list(st["tools"].values())
+        t = tools[0]
+        more = f" (+{len(tools) - 1} more)" if len(tools) > 1 else ""
+        return out("working", "running", kind="tool", tool=t.get("name"), text=describe(t) + more,
+                   since=t.get("ts"), tokens=tokens)
+    if last.get("kind") == "result" and not st["pending_user"]:
+        if st["tasks"]:
+            descs = "; ".join(str(t.get("text") or "task") for t in st["tasks"].values())
+            return out("waiting", "running", kind="task", text=f"background task: {descs}"[:220],
+                       since=min(t.get("ts") or "~" for t in st["tasks"].values()))
+        if st["task_closed_at"]:
+            return out("waiting", "running", kind="notification", since=st["task_closed_at"],
+                       text="background task done: waiting for its notification turn")
+        return out("waiting", "running", kind="inbox", since=last.get("ts"),
+                   text="turn done: waiting briefly for a message before ending")
+    # A model turn is in progress: after a tool result, the start, a user message or a text block.
+    phase = prog.get("phase")
+    text = prog.get("excerpt") or (f"writing {prog['tool']} call" if prog.get("tool") else "")
+    return out("working", "running", kind="writing" if phase in ("text", "tool_input") else "thinking",
+               text=text, since=last.get("ts") or prog.get("ts"), tokens=tokens, phase=phase)
+
+
 def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
     events = read_jsonl(CFG.runs / f"{name}.events.jsonl")
     info = {"name": name, "model": None, "cost": 0.0, "turns": 0, "worktree": None, "branch": None, "base": None,
             "budget": None, "legacy": not events, "commits": [], "dirty": None}
-    idle = time.time() - last_activity(name)
-    alive = pid_alive(read_pid(name))
+    activity = last_activity(name)
+    idle = time.time() - activity
+    has_pid = pid_file(name).exists()
+    alive = pid_alive(read_pid(name)) if has_pid else False
     if events:
         for e in events:
             if e["kind"] == "start":
@@ -142,22 +278,19 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
                 info["cost"], info["turns"] = e.get("cost", 0.0), e.get("turns", 0)
             elif e["kind"] == "end":
                 info["ended"] = True
-        info["status"] = "finished" if info.get("ended") else ("running" if idle < STALL_SECONDS else "stalled")
         info["started"] = events[0].get("ts")
     else:
         rec = next((r for r in reversed(usage) if r.get("name") == name), None)
         if rec:
             info.update(model=rec.get("model"), cost=rec.get("usd", 0.0), turns=rec.get("turns") or 0)
-        done = (CFG.runs / f"{name}.json").exists()
-        info["status"] = "finished" if done else ("running" if idle < STALL_SECONDS else "stalled")
         info["started"] = None
-    # With a PID file (every run since the runner writes its own) the process state decides:
-    # alive = running, even through a long quiet tool call; dead without `end` = dead.
-    # Only runs without a PID file fall back to the file-activity guess ("stalled").
-    if info["status"] != "finished" and pid_file(name).exists():
-        info["status"] = "running" if alive else "dead"
+    # With a PID file (every run since the runner writes its own) the process state decides
+    # live vs crashed; only runs without one fall back to file activity.
+    info.update(derive_state(name, events, alive, has_pid, idle))
+    info["active"] = info["state"] in ("working", "waiting")
     info["pid_alive"] = alive
     info["idle_seconds"] = round(idle)
+    info["last_activity"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(activity)) if activity else None
     wt = info["worktree"] or str(CFG.worktrees / name)
     if git_info and Path(wt).exists():
         info["worktree"] = wt
@@ -168,7 +301,7 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
 
 
 def active_runs(usage: list[dict]) -> list[dict]:
-    return [r for r in (run_info(n, usage, git_info=False) for n in run_names()) if r["status"] == "running"]
+    return [r for r in (run_info(n, usage, git_info=False) for n in run_names()) if r["active"]]
 
 
 def spend() -> dict:
@@ -176,7 +309,7 @@ def spend() -> dict:
     total = sum(r.get("usd", 0.0) for r in usage)
     runs = [run_info(n, usage, git_info=False) for n in run_names()]
     # Runs that haven't ended have not been logged yet, so add their live cost.
-    live = sum(r["cost"] for r in runs if r["status"] != "finished" and not r["legacy"])
+    live = sum(r["cost"] for r in runs if r["state"] != "finished" and not r["legacy"])
     session = sum(r.get("usd", 0.0) for r in usage if r.get("ts", "") >= SESSION_START) + live
     return {"total": round(total + live, 4), "logged": round(total, 4), "cap": CFG.cap, "session": round(session, 4),
             "session_start": SESSION_START, "per_run": {r["name"]: r["cost"] for r in runs}}
@@ -206,7 +339,7 @@ def launch(body: dict) -> tuple[int, dict]:
         return 400, {"ok": False, "error": "name must be a slug: a-z, 0-9, '-' (max 40), and not main/master"}
     usage = usage_records()
     if (CFG.runs / f"{name}.events.jsonl").exists() or (CFG.runs / f"{name}.log").exists():
-        if run_info(name, usage, git_info=False)["status"] == "running":
+        if run_info(name, usage, git_info=False)["active"]:
             return 409, {"ok": False, "error": f"'{name}' is already active"}
     base = str(body.get("base") or CFG.default_base)
     if base not in branches():
@@ -257,7 +390,7 @@ def launch(body: dict) -> tuple[int, dict]:
 
 
 def stop_graceful(name: str) -> tuple[int, dict]:
-    if run_info(name, [], git_info=False)["status"] != "running":
+    if not run_info(name, [], git_info=False)["active"]:
         return 409, {"ok": False, "error": "run is not running"}
     append_jsonl(CFG.runs / f"{name}.inbox.jsonl", {"control": "stop", "ts": now()})
     return 200, {"ok": True}
@@ -278,7 +411,7 @@ def kill(name: str) -> tuple[int, dict]:
 
 
 def archive(name: str) -> tuple[int, dict]:
-    if run_info(name, [], git_info=False)["status"] == "running":
+    if run_info(name, [], git_info=False)["active"]:
         return 409, {"ok": False, "error": "run is still active; stop or kill it first"}
     dest = CFG.runs / "archive"
     dest.mkdir(exist_ok=True)
@@ -306,7 +439,7 @@ def worktree_state(name: str) -> tuple[int, dict]:
         return 403, {"ok": False, "error": "worktree is outside the configured worktrees dir"}
     unmerged = git(CFG.root, "log", f"{base}..{branch}", "--format=%h %s")[1].splitlines()
     return 200, {"ok": True, "worktree": wt, "branch": branch, "base": base, "merged": not unmerged,
-                 "unmerged": unmerged, "dirty": info["dirty"], "active": info["status"] == "running"}
+                 "unmerged": unmerged, "dirty": info["dirty"], "active": info["active"]}
 
 
 def worktree_delete(name: str, discard: bool) -> tuple[int, dict]:
@@ -396,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/runs":
             usage = usage_records()
             runs = [run_info(n, usage) for n in run_names()]
-            runs.sort(key=lambda r: (r["status"] != "running", -last_activity(r["name"])))
+            runs.sort(key=lambda r: (not r["active"], -last_activity(r["name"])))
             return self._json(runs)
         if u.path == "/api/spend":
             return self._json(spend())
@@ -442,7 +575,7 @@ class Handler(BaseHTTPRequestHandler):
         if not name:
             return self._json({"ok": False, "error": "bad run"}, 400)
         if u.path == "/api/inbox":
-            if run_info(name, [], git_info=False)["status"] != "running":
+            if not run_info(name, [], git_info=False)["active"]:
                 return self._json({"ok": False, "error": "run is not running"}, 409)
             if body.get("control") == "stop":
                 return reply(stop_graceful(name))
