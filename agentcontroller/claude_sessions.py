@@ -106,6 +106,7 @@ class Parsed:
     tot: dict = field(default_factory=lambda: {"in": 0, "out": 0, "cr": 0, "cw": 0, "usd": 0.0})
     last_kind: str = ""
     last_text: str = ""
+    turn_done: bool = False  # the last assistant message ended the turn: idle, however recently it was written
 
     def feed(self, e: dict) -> None:
         ts = e.get("timestamp")
@@ -118,6 +119,9 @@ class Parsed:
         t = e.get("type")
         content = msg.get("content")
         if t == "assistant":
+            self.turn_done = msg.get("stop_reason") == "end_turn"
+            if self.turn_done:
+                self.pending.clear()  # a finished turn has nothing in flight (an interrupted call never gets a result)
             mid, usage, model = msg.get("id"), msg.get("usage"), msg.get("model")
             if model and model != "<synthetic>":
                 self.model = model
@@ -140,6 +144,7 @@ class Parsed:
                 elif b.get("type") == "thinking":
                     self.last_kind = "thinking"
         elif t == "user":
+            self.turn_done = False  # a prompt or a background-task notification starts a turn
             for b in content if isinstance(content, list) else []:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     self.pending.pop(b.get("tool_use_id"), None)
@@ -218,7 +223,7 @@ def _local(ts: str | None) -> str | None:
 
 def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, now: float, meta: dict | None = None) -> dict:
     idle = max(0.0, now - p.mtime)
-    running = idle < RUNNING_IDLE or (bool(p.pending) and idle < PENDING_IDLE)
+    running = not p.turn_done and (idle < RUNNING_IDLE or (bool(p.pending) and idle < PENDING_IDLE))
     if p.pending:
         n, a = next(iter(reversed(p.pending.values())))
         act = {"kind": "tool", "text": f"{n}: {a}"}
