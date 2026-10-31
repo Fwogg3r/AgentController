@@ -117,11 +117,11 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
 /* Clawd */
 .clawd { display:block; }
 .clawd .eye { fill:#2B1A12; } .clawd .zz, .clawd .bang { display:none; font:bold 5px monospace; }
-.clawd.running { animation:bob 1.1s ease-in-out infinite; }
-.clawd.running .leg:nth-of-type(odd) { animation:step 1.1s steps(2) infinite; }
+.clawd.running { animation:bob 1.1s ease-in-out var(--ph1, 0s) infinite; }
+.clawd.running .leg:nth-of-type(odd) { animation:step 1.1s steps(2) var(--ph1, 0s) infinite; }
 .clawd.finished .eye { display:none; } .clawd.finished .closed { display:block; } .clawd .closed { display:none; }
-.clawd.finished .zz { display:block; fill:var(--muted); animation:zz 2.4s ease-in-out infinite; }
-.clawd.waiting .zz { display:block; fill:var(--warn); animation:zz 2.4s ease-in-out infinite; }
+.clawd.finished .zz { display:block; fill:var(--muted); animation:zz 2.4s ease-in-out var(--ph2, 0s) infinite; }
+.clawd.waiting .zz { display:block; fill:var(--warn); animation:zz 2.4s ease-in-out var(--ph2, 0s) infinite; }
 .clawd.crashed .bang { display:block; fill:var(--bad); }
 .clawd.crashed { filter:grayscale(.85); opacity:.7; }
 .clawd.ended { filter:grayscale(.85); opacity:.5; }
@@ -228,7 +228,10 @@ const usd = n => n == null ? "-" : "$" + Number(n).toFixed(2);
 function clawd(state, px) {
   const r = (x, y, w, h, c) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" ${c || ""}/>`;
   const o = 'fill="#D97757"';
-  const svg = `<svg class="clawd ${state}" viewBox="0 -2 11 10" width="${px}" height="${px * 10 / 11}" shape-rendering="crispEdges">
+  // The run list is rebuilt on every poll; a fresh icon would restart its animation (a visible jump every 4 s),
+  // so it starts at the phase a global clock gives it (negative delays: 1.1 s bob/step, 2.4 s zz).
+  const now = Date.now(), ph = `--ph1:-${now % 1100}ms;--ph2:-${now % 2400}ms`;
+  const svg = `<svg class="clawd ${state}" style="${ph}" viewBox="0 -2 11 10" width="${px}" height="${px * 10 / 11}" shape-rendering="crispEdges">
     ${r(1,1,9,4,o)}${r(0,3,1,2,o)}${r(10,3,1,2,o)}
     ${r(2,5,1,2,o).replace('<rect','<rect class="leg"')}${r(4,5,1,2,o).replace('<rect','<rect class="leg"')}
     ${r(6,5,1,2,o).replace('<rect','<rect class="leg"')}${r(8,5,1,2,o).replace('<rect','<rect class="leg"')}
@@ -376,7 +379,8 @@ function drawRuns() {
     d.append(g, t);
     if (r.active) {
       const line = el("div", "act"), n = el("span");
-      line.append(el("span", "g", glyph()), n); d.append(line); actNodes.push([r, n]);
+      n.textContent = actLine(r.name, acts[r.name] || actFrom(r)).join(" ");
+      line.append(el("span", "g", r.state === "waiting" ? "·" : glyph()), n); d.append(line); actNodes.push([r, n]);
     } else if (r.state === "crashed") d.append(el("div", "act", "last: " + (r.activity?.text || "?")));
     d.title = r.activity?.text || "";
     d.onclick = () => select(r.name);
