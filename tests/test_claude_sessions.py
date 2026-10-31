@@ -116,6 +116,16 @@ class T(unittest.TestCase):
         img = user([{"type": "image", "source": {}}])
         self.assertEqual(cs.to_events(img, [1])[0]["text"], "[image]")
 
+    def test_end_turn_is_idle(self):
+        done = asst("m1", [{"type": "text", "text": "done"}])
+        done["message"]["stop_reason"] = "end_turn"
+        write(self.main, [user("go"), asst("m0", [{"type": "tool_use", "id": "t9", "name": "Bash", "input": {}}]), done])
+        r = cs.list_runs(self.d)[0]                                # written just now, but the turn ended
+        self.assertEqual(r["state"], "finished")
+        self.assertFalse(cs._cache[str(self.main)].pending)       # the orphaned call doesn't keep it running
+        write(self.main, [user("<task-notification>x</task-notification>")])
+        self.assertEqual(cs.list_runs(self.d)[0]["state"], "working")
+
     def test_project_dir(self):
         root = Path("C:/Users/X/Doc/My_Proj")
         (self.d / "c--Users-X-Doc-My-Proj").mkdir()
