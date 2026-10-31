@@ -107,6 +107,15 @@ class T(unittest.TestCase):
         self.assertFalse(res[0]["ok"])
         self.assertEqual(len(res[0]["text"]), 400)
 
+    def test_user_message_on_card(self):
+        write(self.main, [user("go"), asst("m1", [{"type": "text", "text": "done"}]), user("now fix the dash")])
+        a = cs.list_runs(self.d)[0]["activity"]
+        self.assertEqual((a["kind"], a["text"]), ("user", "now fix the dash"))
+        write(self.main, [asst("m2", [{"type": "thinking", "thinking": ""}])])
+        self.assertEqual(cs.list_runs(self.d)[0]["activity"]["kind"], "thinking")
+        img = user([{"type": "image", "source": {}}])
+        self.assertEqual(cs.to_events(img, [1])[0]["text"], "[image]")
+
     def test_project_dir(self):
         root = Path("C:/Users/X/Doc/My_Proj")
         (self.d / "c--Users-X-Doc-My-Proj").mkdir()
