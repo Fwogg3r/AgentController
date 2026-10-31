@@ -66,8 +66,16 @@ def _is_prompt(e: dict) -> bool:
     """A real user prompt: not meta, not a slash-command echo or injected <system-reminder> block."""
     if e.get("isMeta") or e.get("type") != "user":
         return False
-    t = _text_of((e.get("message") or {}).get("content")).lstrip()
+    t = _prompt_text((e.get("message") or {}).get("content")).lstrip()
     return bool(t) and not t.startswith("<")
+
+
+def _prompt_text(content) -> str:
+    """The prompt's text; a pasted image with no text still counts as a message (tool results nest theirs)."""
+    t = _text_of(content)
+    if not t.strip() and isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "image" for b in content):
+        return "[image]"
+    return t
 
 
 def tool_arg(name: str, inp) -> str:
@@ -136,7 +144,8 @@ class Parsed:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     self.pending.pop(b.get("tool_use_id"), None)
             if _is_prompt(e):
-                self.last_kind = "thinking"
+                # shown on the card until the model starts answering
+                self.last_kind, self.last_text = "user", _first_line(_prompt_text(content), 160)
                 if not self.title:
                     self.title = _first_line(_text_of(content))
 
@@ -214,7 +223,8 @@ def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, no
         n, a = next(iter(reversed(p.pending.values())))
         act = {"kind": "tool", "text": f"{n}: {a}"}
     else:
-        act = {"kind": p.last_kind if p.last_kind in ("thinking", "writing") else "thinking", "text": ""}
+        act = {"kind": p.last_kind if p.last_kind in ("thinking", "writing", "user") else "thinking",
+               "text": p.last_text if p.last_kind == "user" else ""}
     act["since"] = _local(p.last_ts)
     if act["since"]:
         try:
@@ -317,7 +327,7 @@ def to_events(e: dict, first_prompt: list) -> list[dict]:
     out = []
     if e["type"] == "user":
         if _is_prompt(e):
-            text = _text_of(content)
+            text = _prompt_text(content)
             if not first_prompt:
                 first_prompt.append(1)
                 return [{"kind": "prompt", "text": text[:20000], "ts": ts, "truncated": len(text) > 20000}]

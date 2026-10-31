@@ -255,7 +255,9 @@ def derive_state(name: str, events: list[dict], alive: bool, has_pid: bool, idle
                        text="background task done: waiting for its notification turn")
         return out("waiting", "running", kind="inbox", since=last.get("ts"),
                    text="turn done: waiting briefly for a message before ending")
-    # A model turn is in progress: after a tool result, the start, a user message or a text block.
+    if last.get("kind") == "user":  # a message the model hasn't started answering yet
+        return out("working", "running", kind="user", text=str(last.get("text") or "")[:200], since=last.get("ts"))
+    # A model turn is in progress: after a tool result, the start or a text block.
     phase = prog.get("phase")
     text = prog.get("excerpt") or (f"writing {prog['tool']} call" if prog.get("tool") else "")
     return out("working", "running", kind="writing" if phase in ("text", "tool_input") else "thinking",

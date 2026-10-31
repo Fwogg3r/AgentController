@@ -307,6 +307,7 @@ function actLine(name, a) {
   const meta = `(${el_}${tok ? " · ↓ " + tok + " tokens" : ""})`;
   switch (a.kind) {
     case "thinking": return [verb(name) + "…", meta];
+    case "user": return ["You: " + (a.text || ""), `(${el_})`];
     case "writing": return [(a.text && a.text.startsWith("writing ") ? "Preparing " + a.text.slice(8) : "Writing") + "…", meta];
     case "tool": return ["Running " + a.text + "…", meta];
     case "task": return ["Waiting for " + a.text, `(${el_})`];
@@ -482,7 +483,7 @@ function render(e) {
     case "text":
       if (curRun()?.oneshot) { const d = el("div", "md"); d.innerHTML = mdToHtml(e.text); add(d); break; }
       add(line("", "●", e.text, e.ts)); bump(e, { kind: "thinking", text: "", tokens: acts[current]?.tokens, keepT0: true }); break;
-    case "user": add(line("user", ">", e.text, e.ts)); bump(e, { kind: "thinking", text: "" }); break;
+    case "user": add(line("user", ">", e.text, e.ts)); bump(e, { kind: "user", text: e.text }); break;
     case "thinking": {
       const d = el("details", "think");
       d.append(el("summary", "", "✻ Thinking…"), el("div", "", e.text));
