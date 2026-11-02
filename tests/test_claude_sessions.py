@@ -88,6 +88,24 @@ class T(unittest.TestCase):
         self.assertEqual(r["turns"], 1)
         self.assertFalse(cs._cache[str(self.main)].pending)
 
+    def test_duration(self):
+        t = lambda sec: f"2026-01-01T10:{sec // 60:02d}:{sec % 60:02d}"
+        now = time.mktime(time.strptime(t(600), "%Y-%m-%dT%H:%M:%S"))
+        self.assertEqual(cs.duration_fields(t(0), t(125), False, now), {"duration": 125, "duration_live": False})
+        self.assertEqual(cs.duration_fields(t(0), t(125), True, now), {"duration": 600, "duration_live": True})
+        self.assertEqual(cs.duration_fields(None, None, True, now)["duration"], None)
+        self.assertEqual(cs.duration_fields("garbage", t(5), False, now)["duration"], None)
+        # a finished subagent: first to last transcript line, local time zone applied to both ends
+        write(self.d / self.sid / "subagents" / "agent-a1b2c3d4e5.jsonl",
+              [user("go", ts="2026-01-01T10:00:00.000Z"),
+               asst("s1", [{"type": "text", "text": "x"}], ts="2026-01-01T10:03:05.000Z")])
+        write(self.main, [user("hi", ts="2026-01-01T09:59:00.000Z"),
+                          asst("m", [{"type": "text", "text": "x"}], ts="2026-01-01T10:10:00.000Z")])
+        old = time.time() + 3600  # long after the files were written: both idle
+        for r in cs.list_runs(self.d, max_age=1e9, now=old):
+            self.assertFalse(r["duration_live"])
+            self.assertEqual(r["duration"], 185 if r["kind"] == "plan-agent" else 660)
+
     def test_state_and_age(self):
         write(self.main, [user("hi"), asst("m1", [{"type": "text", "text": "x"}])])
         r = cs.list_runs(self.d, now=time.time() + 600)[0]       # quiet for 10 min, nothing pending

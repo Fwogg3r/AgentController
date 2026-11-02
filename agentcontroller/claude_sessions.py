@@ -221,6 +221,20 @@ def _local(ts: str | None) -> str | None:
         return None
 
 
+def duration_fields(started: str | None, ended: str | None, active: bool, now: float) -> dict:
+    """Seconds worked, computed on the server (a remote browser's clock or time zone may differ).
+
+    Both stamps are local "YYYY-MM-DDTHH:MM:SS". A live row runs to `now` (the page keeps counting from
+    `duration` + time since the fetch); a finished one to its last activity. None when the start is unknown.
+    """
+    try:
+        t0 = time.mktime(time.strptime(started, "%Y-%m-%dT%H:%M:%S"))
+        t1 = now if active or not ended else time.mktime(time.strptime(ended, "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return {"duration": None, "duration_live": False}
+    return {"duration": max(0, round(t1 - t0)), "duration_live": bool(active)}
+
+
 def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, now: float, meta: dict | None = None) -> dict:
     idle = max(0.0, now - p.mtime)
     running = not p.turn_done and (idle < RUNNING_IDLE or (bool(p.pending) and idle < PENDING_IDLE))
@@ -247,6 +261,7 @@ def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, no
         "started": _local(p.first_ts), "last_activity": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(p.mtime)),
         "idle_seconds": round(idle), "oneshot": False, "legacy": False, "commits": [], "worktree": None, "branch": None,
         "dirty": None, "pid_alive": False, "budget": None,
+        **duration_fields(_local(p.first_ts), _local(p.last_ts), running, now),
     }
 
 

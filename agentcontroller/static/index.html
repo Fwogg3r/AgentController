@@ -293,8 +293,11 @@ function dur(s) {
   s = Math.max(0, Math.round(s));
   if (s < 60) return s + "s";
   if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
-  return Math.floor(s / 3600) + "h " + Math.floor(s % 3600 / 60) + "m";
+  return Math.floor(s / 3600) + "h " + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m";
 }
+// Time worked: the server's seconds at fetch time, plus the time since then while the run is live.
+const worked = r => r.duration == null ? null : r.duration + (r.duration_live ? (Date.now() - fetchedAt) / 1000 : 0);
+const workedText = r => { const w = worked(r); return w == null ? "" : " · ⏱ " + dur(w); };
 const ktok = n => n == null ? null : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
 const tsMs = ts => new Date(ts).getTime() + skew;  // "YYYY-MM-DDTHH:MM:SS" parses as browser-local time
 function actFrom(r) {
@@ -338,9 +341,10 @@ function drawSpinner() {
     box.append(el("span", "m", "ended (no record) · " + (r.activity?.text || "")));
   }
 }
-let actNodes = [];
+let actNodes = [], metaNodes = [];
 setInterval(() => {
   drawSpinner();
+  for (const [r, n, base] of metaNodes) n.textContent = base + workedText(r);
   for (const [r, n] of actNodes) { const a = acts[r.name] || actFrom(r); n.textContent = actLine(r.name, a).join(" "); n.previousSibling.textContent = r.state === "waiting" ? "·" : glyph(); }
 }, 120);
 
@@ -362,7 +366,7 @@ async function loadRuns() {
 }
 function drawRuns() {
   const [vis, hidden] = visibleRuns();
-  const box = $("#runs"); box.textContent = ""; actNodes = [];
+  const box = $("#runs"); box.textContent = ""; actNodes = []; metaNodes = [];
   for (const r of vis) {
     const d = el("div", "run" + (r.name === current ? " sel" : "") + (r.kind === "plan-agent" ? " sub" : ""));
     const g = el("div"); g.innerHTML = clawd(r.state === "working" ? "running" : r.state, 32);
@@ -373,6 +377,8 @@ function drawRuns() {
     const m = el("div", "meta", `${(r.model || "?").replace("claude-", "")} · ${usd(r.cost)} · ` +
       (r.oneshot ? `${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` : r.plan ? `${r.tool_calls} tools` : `${r.turns} turns`));
     if (r.plan) m.textContent = `${(r.model || "?").replace("claude-", "")} · ≈${usd(r.cost)} API-equiv · ${r.tool_calls} tools`, m.title = "estimate at API prices; billed to the plan, not the API";
+    const base = m.textContent; m.textContent = base + workedText(r);
+    if (r.duration_live) metaNodes.push([r, m, base]);
     if (r.oneshot) t.append(el("span", "pill oneshot", "ask"));
     if (r.plan) t.append(el("span", "pill oneshot", r.kind === "plan" ? "plan" : "plan agent"));
     t.append(p, m);
@@ -397,6 +403,7 @@ function drawRuns() {
       : r.oneshot ? `one-shot API call · effort ${r.effort || "?"} · ${usd(r.cost)} · ${ktok(r.tokens_in) ?? "?"} in / ${ktok(r.tokens_out) ?? "?"} out` +
       `${r.seconds != null ? " · " + dur(r.seconds) : ""}${r.backfilled ? " · imported from usage log" : ""}`
       : `${r.branch || "-"} · ${r.worktree ? "uncommitted: " + (r.dirty ?? "?") : "no worktree"}${r.legacy ? " · legacy log" : ""}`);
+    if (r.duration != null) b.append(` · worked ${dur(worked(r))}${r.duration_live ? " (running)" : ""}${r.started ? " · started " + r.started.replace("T", " ") : ""}`);
     h.append(b, el("div", "commits mono", (r.commits || []).join("\n")));
     const live = r.active;
     const act = el("div", "actions");
