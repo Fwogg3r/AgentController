@@ -116,6 +116,7 @@ def main() -> int:
         pid = r["pid"]
         req("/api/inbox?run=t2-stubborn", {"control": "stop"})
         time.sleep(1.5)
+        check("every row has a duration", all("duration" in x and "duration_live" in x for x in req("/api/runs")[1]))
         check("stubborn ignores stop", next(x for x in req("/api/runs")[1] if x["name"] == "t2-stubborn")["status"] == "running")
         check("kill", req("/api/kill?run=t2-stubborn", {})[0] == 200)
         check("process gone", wait_for(lambda: subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True,

@@ -305,6 +305,12 @@ def run_info(name: str, usage: list[dict], git_info: bool = True) -> dict:
         except ValueError:
             pass
     info["active"] = info["state"] in ("working", "waiting")
+    # Time worked: start -> now while active, else start -> last write (or the one-shot's own timer).
+    info.update(claude_sessions.duration_fields(
+        info["started"], time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(activity)) if activity else None,
+        info["active"], time.time()))
+    if info["oneshot"] and not info["active"] and info.get("seconds") is not None:
+        info["duration"] = round(info["seconds"])
     info["pid_alive"] = alive
     info["idle_seconds"] = round(idle)
     info["last_activity"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(activity)) if activity else None
