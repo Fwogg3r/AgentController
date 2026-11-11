@@ -674,7 +674,7 @@ function actLine(r, a) {
     case "user": return ["You: " + (a.text || ""), `(${el_})`];
     case "writing": return [(a.text && a.text.startsWith("writing ") ? "Preparing " + a.text.slice(8) : "Writing") + "…", meta];
     case "tool": return ["Running " + a.text + "…", meta];
-    case "task": return ["Waiting for " + a.text, `(${el_})`];
+    case "task": return ["Waiting for " + (a.text || "").replace(/^waiting for /i, ""), `(${el_})`];
     case "approval": return [a.text || "waiting for approval", `(${el_})`];
     case "notification": case "inbox": case "rate_limit": case "retry": return ["Waiting: " + a.text, `(${el_})`];
     default: return [a.text || a.kind, ""];
