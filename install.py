@@ -186,7 +186,7 @@ def install_aider(args) -> None:
         say("skip", "aider is already installed (agentlocal is tested with commit 253f036; "
                     f"to match it: uv tool install --force --python {AIDER_PYTHON} {AIDER_SPEC})")
         return
-    if not args.local and not confirm(args, "Also install aider for agentlocal (local-model agents; LM Studio needed to use it)?", False):
+    if not args.local and (args.yes or not confirm(args, "Also install aider for agentlocal (local-model agents; LM Studio needed to use it)?", False)):
         say("skip", "aider not installed (agentlocal needs it; rerun with --local)")
         return
     try:
@@ -211,7 +211,9 @@ def run_doctor(args) -> None:
     say("run", " ".join(cmd))
     if DRY:
         return
-    if subprocess.run(cmd).returncode != 0:
+    # run in the --init project so the doctor's API-key row sees the project just set up
+    cwd = Path(args.init).expanduser().resolve() if args.init else None
+    if subprocess.run(cmd, cwd=cwd).returncode != 0:
         say("warn", "agentdoctor reports missing required pieces (see above); fix them and rerun `agentdoctor`")
 
 
@@ -394,6 +396,19 @@ def remove_dash_task() -> None:
         subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True)
 
 
+def register_in_dashboard(project: Path) -> None:
+    """List the project in the dashboard right away (otherwise it only appears after its first agent run)."""
+    say("run", f"register {project} in ~/.agentcontroller (so the dashboard lists it)")
+    if DRY:
+        return
+    sys.path.insert(0, str(REPO))
+    try:
+        from agentcontroller import registry
+        registry.register_project(project)
+    except Exception as e:  # noqa: BLE001 - cosmetic: the dashboard also finds it after the first run
+        say("warn", f"couldn't register the project ({type(e).__name__}: {e}); it shows up after its first agent run")
+
+
 def init_project(args, project: Path) -> None:
     """Minimal per-project setup from examples/agentcontroller.toml (its default secrets dir is .agentcontroller)."""
     toml = project / "agentcontroller.toml"
@@ -405,6 +420,7 @@ def init_project(args, project: Path) -> None:
     ignored = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
     if ".agentcontroller/" not in ignored:
         write(gitignore, "\n".join([*ignored, ".agentcontroller/"]) + "\n")
+    register_in_dashboard(project)
     key_path = project / ".agentcontroller" / "api.key"
     if key_path.exists():
         say("skip", f"{key_path} exists")

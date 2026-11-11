@@ -48,3 +48,13 @@ def test_pins_are_full_commits():
     src = (REPO / "install.py").read_text(encoding="utf-8")
     for name in ("ROADMAP_SPEC", "AIDER_SPEC"):
         assert re.search(rf'{name} = "[^"]+@[0-9a-f]{{40}}"', src), name
+
+
+def test_yes_does_not_install_aider_and_init_registers_project(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    r, _ = dry(tmp_path, "--init", str(proj))
+    assert r.returncode == 0, r.stderr
+    assert "uv tool install --python" not in r.stdout       # -y alone must not pull in aider (only --local)
+    assert "register" in r.stdout and "so the dashboard lists it" in r.stdout
+    assert not (proj / "agentcontroller.toml").exists()     # dry run
