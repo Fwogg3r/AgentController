@@ -16,6 +16,7 @@ agentusage = "agentcontroller.usage:main"
 agentpilot = "agentcontroller.pilot:main"
 agentask = "agentcontroller.oneshot:main"
 agentlocal = "agentcontroller.local.cli:main"
+agentdoctor = "agentcontroller.doctor:main"
 
 [build-system]
 requires = ["hatchling"]

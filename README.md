@@ -18,9 +18,19 @@ Promotional and API credits are billed against **API / Agent SDK usage**. Claude
 the plan instead. Running agents through the SDK with an API key bills exactly the budget you capped. The key is passed
 through `apiKeyHelper` to the agent process only; it is never put in a global `ANTHROPIC_API_KEY`.
 
-## Quick start (one command)
+## Quick start
 
-Needs [uv](https://docs.astral.sh/uv/getting-started/installation/), git and Claude Code. Windows, macOS and Linux.
+Follow this top to bottom on a fresh machine (Windows, macOS or Linux).
+
+**1. Prerequisites.** Install these yourself; the installer checks for them but never installs system software.
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (runs everything; no pip or manual venvs)
+- git (agents work in git worktrees)
+- [Claude Code](https://docs.claude.com/en/docs/claude-code/setup), for the `/api-request` and `/batchy` skills and `agentpilot`
+  (`agentctl` and `agentask` don't need it: the Agent SDK bundles its own copy)
+- an Anthropic API key (`sk-ant-api...`, from console.anthropic.com) with some credit, for API agents and one-shot calls
+
+**2. Install.** Add `--local` if you also want local-model agents (installs aider; see [Local agents](#local-agents-agentlocal)).
 
 ```sh
 git clone https://github.com/Fwogg3r/AgentController
@@ -28,11 +38,55 @@ cd AgentController
 uv run install.py --init /path/to/your/project      # asks for your Anthropic API key once (hidden input)
 ```
 
-Then restart Claude Code. The installer:
+`uv run install.py --dry-run -y` first shows the plan and changes nothing. The installer asks before installing the `roadmap`
+CLI (and aider with `--local`), then runs `agentdoctor` at the end.
+
+**3. Check it.** `agentdoctor` prints a table of every piece: OK, missing (required / recommended / optional), with what to do
+about each. It exits 0 only when everything required is OK, so you can rerun it any time (`--json` for scripts).
+It also looks for LM Studio and pmjc on this machine and offers to write what it finds into `~/.agentcontroller/config.toml`
+(comments and other keys are kept). `agentdoctor --scan` additionally probes the local /24 subnet for them, after asking.
+
+**4. Open the dashboard.** Restart Claude Code, then open http://127.0.0.1:8765/ (on Windows the installer's logon task keeps it
+running; elsewhere any `agentctl`/`agentask` call, or `agentdash`, starts it). Your project shows up once an agent has run in it,
+or add its parent folder to `scan` in `~/.agentcontroller/config.toml`.
+
+**5. Run your first agent.** From the project, either press "+ New agent" in the dashboard, or:
+
+```sh
+agentask "what does this repo do?" -m sonnet         # one API call, recorded in the dashboard
+agentctl --brief briefs/task.md --name first --model sonnet --budget 2     # an agent in its own worktree
+```
+
+or in Claude Code: `/api-request agent: implement the brief in briefs/task.md`.
+
+### What it depends on
+
+| Tool or service | Needed for | Required? | How it gets there |
+|---|---|---|---|
+| [uv](https://docs.astral.sh/uv/) | installing and running everything | **required** | you install it; `install.py` stops with the link if missing |
+| git | worktrees, branches, the dashboard's git info | **required** | you install it |
+| This package (`agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor`) | everything | **required** | `install.py` (`uv tool install --editable`) |
+| `claude-agent-sdk`, `anthropic` | API agents, one-shot calls | **required** | dependencies of the package; the SDK bundles the Claude Code binary it drives |
+| [`roadmap` CLI](https://github.com/Fwogg3r/WebRoadmap) (WebRoadmap) | the dashboard's Roadmap tab, project roadmaps | **required** for those | `install.py` asks, then `uv tool install` at a pinned commit (`--no-roadmap` to skip) |
+| Anthropic API key | `agentctl`, `agentask`, `/batchy` | recommended | `install.py --init PROJECT` (stored in the project's gitignored `.agentcontroller/api.key`, never in a global `ANTHROPIC_API_KEY`) |
+| Claude Code CLI | `/api-request`, `/batchy`, `agentpilot`, plan-session view | recommended | you install it; `install.py` prints how if it is missing |
+| claude-batch-toolkit | `/batchy` (Batch API, 50% off) | optional | `install.py` fetches it at a pinned commit (`--no-batchy` to skip) |
+| [aider](https://github.com/Aider-AI/aider) | `agentlocal` (local-model agents) | optional | `install.py --local`, pinned commit, Python 3.12 |
+| [LM Studio](https://lmstudio.ai) | models for `agentlocal`, the Models tab | optional | you install it and start its server (port 1234); `agentdoctor` finds it |
+| [pmjc](https://github.com/Fwogg3r/PersonalMCPJobController) | the Jobs tab, approvals, notifications | optional | you install it (its README); `agentdoctor` finds it and tells you how to make a `jobs`-scope token for `[pmjc] token_file` |
+| `cloudflared` + Cloudflare Access | reaching the dashboard from the internet | optional | you set it up, see [Internet access](#internet-access-cloudflare-access) |
+| Windows Task Scheduler | the always-on dashboard (logon task) | optional (Windows) | `install.py` creates it (`--no-dash-task` to skip) |
+
+Not needed: Node, npm and Firebase (nothing in AgentController uses them; Node is only one way to install Claude Code).
+
+## What the installer does
+
+Restart Claude Code afterwards so it picks up the skills and the MCP server. The installer:
 
 | What | Where |
 |---|---|
-| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
+| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
+| The `roadmap` CLI and its Claude skill (asks first); with `--local` also aider | `uv tool install` from GitHub at pinned commits (WebRoadmap, Aider-AI/aider); skill in `~/.claude/skills/roadmap/` |
 | **`/api-request`** skill: one-shot asks and design debates with another model, background API agents, dashboard, spend | `~/.claude/skills/api-request/` (`SKILL.md` + `ask_api.py`) |
 | **`/batchy`** skill + `claude-batch` MCP server: non-urgent work through the Message Batches API at 50% off | Fetched from [s2-streamstore/claude-batch-toolkit](https://github.com/s2-streamstore/claude-batch-toolkit) at a pinned commit into `~/.claude/skills/batchy/` and `~/.claude/mcp/`, registered in `~/.claude.json` |
 | Windows: the hidden Task Scheduler logon task **"AgentController dashboard"** (`agentdash --all`, so the dashboard is always up at http://127.0.0.1:8765/) and `~/.agentcontroller/config.toml` with commented defaults | Task Scheduler, `~/.agentcontroller/` |
@@ -50,7 +104,7 @@ the Admin API (organisation-wide, daily, hours of lag; `--by-key` splits tokens 
 Re-run `uv run install.py` to refresh. On Windows close a running `agentdash` first (it locks the tool directory), or pass `--no-tool`.
 The CLIs also start the dashboard if it is down (`schtasks /Run` first, then a hidden spawn).
 
-Options: `--key-file F` (read the key from a file), `--dry-run`, `-y` (no prompts), `--no-batchy`, `--no-tool`, `--no-dash-task` (skip the logon task),
+Options: `--key-file F` (read the key from a file), `--dry-run`, `-y` (no prompts), `--no-batchy`, `--local` (also install aider for agentlocal), `--no-roadmap`, `--no-doctor`, `--no-tool`, `--no-dash-task` (skip the logon task),
 `--statusline` (the toolkit's batch status line; this also writes the key to `~/.claude/env`, which only that
 script sources), `--uninstall` (removes the skills, the MCP entry and the tool; keeps `~/.claude/batches`).
 
