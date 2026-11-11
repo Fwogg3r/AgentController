@@ -327,6 +327,8 @@ def local_info(rec: dict) -> dict:
         act = {"kind": "approval", "text": f"waiting for approval: {approvals[0].get('summary', '')}"[:200]}
     elif lastev.get("kind") == "call_start":
         act = {"kind": "thinking", "text": f"{lastev.get('phase', '')} call, stage {lastev.get('stage')}"}
+    elif lastev.get("kind") == "approval":
+        act = {"kind": "thinking", "text": f"approval [{lastev.get('gate', '')}] {lastev.get('summary', '')}"[:200]}
     else:
         act = {"kind": "thinking", "text": f"{lastev.get('kind', '')} {json.dumps({k: v for k, v in lastev.items() if k not in ('ts', 'run_id', 'kind')})[:160]}"}
     act["since"] = _iso(lastev.get("ts")) if lastev.get("ts") else None

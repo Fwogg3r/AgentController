@@ -52,6 +52,7 @@ main { flex:1; display:flex; min-height:0; }
 #grip { position:absolute; top:0; right:-3px; width:7px; height:100%; cursor:col-resize; z-index:5; }
 #grip:hover, #grip.drag { background:var(--accent); opacity:.35; }
 /* projects */
+#side > * { flex:none; }
 #projects { display:flex; flex-direction:column; gap:3px; padding-bottom:8px; border-bottom:1px solid var(--line); max-height:34vh; overflow:auto; }
 .proj { display:grid; grid-template-columns:10px 1fr auto; gap:6px; align-items:center; padding:4px 8px; border-radius:10px; cursor:pointer; border:1px solid transparent; position:relative; }
 .proj:hover { background:var(--card); }
@@ -216,6 +217,8 @@ table.t th { color:var(--muted); font-weight:600; }
   #sidewrap { display:block; }
   #grip { display:none; }
   #side { width:auto !important; border-right:0; border-bottom:1px solid var(--line); max-height:40vh; }
+  #projects { flex-direction:row; overflow-x:auto; overflow-y:hidden; max-height:none; }
+  .proj { min-width:150px; }
   #runs { flex-direction:row; overflow:auto; }
   .run { min-width:190px; }
   .bar { width:90px; }
@@ -562,6 +565,8 @@ async function loadRuns() {
   if (filt.nplan) params.plan = 0; else params.plan_age = filt.recent ? 86400 : 604800;
   const data = await jget("/api/runs", params);
   if (!Array.isArray(data)) return;
+  const oldBy = new Map(allRuns.map(r => [rk(r), r]));
+  for (const r of data) { const o = oldBy.get(rk(r)); if (o && r.commits === undefined && o.commits) { r.commits = o.commits; r.dirty = o.dirty; } }
   allRuns = data;
   allRuns.sort((a, b) => (b.active - a.active) || (b.last_activity || "").localeCompare(a.last_activity || ""));
   fetchedAt = Date.now();
@@ -622,10 +627,10 @@ async function loadJobs() {
   jobs = d || { ok: false, error: "the dashboard server did not answer /api/jobs" };
   if (tab === "jobs") drawJobs();
 }
-async function loadRoadmap() {
+async function loadRoadmap(fresh) {
   $("#rm-msg").textContent = "loading…";
   if (sel === ALL) { roadmapData = null; drawRoadmap(); return; }
-  const want = sel, d = await jget("/api/roadmap", { p: sel });
+  const want = sel, d = await jget("/api/roadmap", { p: sel, refresh: fresh === true ? 1 : null });
   if (want !== sel) return;
   roadmapData = d || { ok: false, error: "the dashboard server did not answer /api/roadmap" };
   drawRoadmap();
@@ -805,6 +810,13 @@ function drawRunHead() {
   if (r.local) drawLocalStatic(r);
   $("#send").disabled = $("#stop").disabled = !live || !!r.plan;
 }
+async function fetchGit(project, name) {   // /api/runs?p=* skips git info; the per-project call has it
+  const r = allRuns.find(x => x.project === project && x.name === name);
+  if (!r || !r.worktree) return;
+  const d = await jget("/api/runs", { p: project, plan: 0 });
+  const full = Array.isArray(d) && d.find(x => x.name === name);
+  if (full && r) { r.commits = full.commits; r.dirty = full.dirty; if (isCur(r)) drawAll(); }
+}
 function select(project, name) {
   if (typeof project === "object") { name = project.name; project = project.project; }
   if (sel !== ALL && sel !== project) { sel = project; LS.set("project", sel); loadCfg(); loadSpend(); }
@@ -812,6 +824,7 @@ function select(project, name) {
   if (es) es.close();
   $("#stream").textContent = ""; resetLocal();
   setTab("agents");
+  fetchGit(project, name);
   es = new EventSource("/api/stream?" + qs({ p: project, run: name }));
   es.onmessage = ev => { try { const e = JSON.parse(ev.data); if (curRun()?.local || /^local_/.test(e.kind)) lrender(e); else render(e); } catch {} };
   drawAll();
@@ -1171,7 +1184,7 @@ function drawRoadmap() {
   if (!(d.phases || []).length) wrap.append(el("div", "empty", "The roadmap has no phases yet."));
   box.append(wrap);
 }
-$("#rm-refresh").onclick = loadRoadmap;
+$("#rm-refresh").onclick = () => loadRoadmap(true);
 
 // ---- jobs tab ----
 const arr = (x, ...keys) => Array.isArray(x) ? x : (x && typeof x === "object" ? (keys.map(k => x[k]).find(Array.isArray) || []) : []);
@@ -1258,13 +1271,24 @@ function drawAttention() {
     const it = el("div", "attn-item"), ic = el("div"); ic.innerHTML = (run ? iconOf(run, 22) : profileOf({}).icon("waiting", 22));
     const b = el("div"); b.append(el("div", "t", a.text || a.kind), el("div", "pj", [a.kind, a.run, projects.find(p => p.key === a.project)?.name || ""].filter(Boolean).join(" · ") + (a.ts ? " · " + ago(a.ts) : "")));
     it.append(ic, b);
-    const url = typeof a.action === "string" ? a.action : a.action && a.action.url;
+    const ac = a.action, url = typeof ac === "string" ? ac : ac && (ac.url || (ac.type === "link" && ac.url));
     it.onclick = () => {
       $("#attn-pop").hidden = true;
       if (url && /^https?:\/\//.test(url)) window.open(url, "_blank", "noopener,noreferrer");
       else if (a.run) select(a.project, a.run);
       else if (a.project) selectProject(a.project);
     };
+    if (ac && ac.type === "local_approve") {
+      const bx = el("div", "actions");
+      const decide = approve => async ev => {
+        ev.stopPropagation();
+        const res = await post("/api/local_approve", { p: a.project }, { run: ac.run, id: ac.id, approve });
+        if (res.ok === false) alert(res.error || "failed");
+        loadRuns(); loadAttention();
+      };
+      const y = el("button", "primary sm", "Approve"), n = el("button", "danger sm", "Deny");
+      y.onclick = decide(true); n.onclick = decide(false); bx.append(y, n); b.append(bx);
+    }
     pop.append(it);
   }
 }
