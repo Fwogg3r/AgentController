@@ -636,6 +636,64 @@ def extra_part(key: str, plan: bool, age: float) -> list[dict]:
     return rows
 
 
+def propagate_waiting(rows: list[dict]) -> list[dict]:
+    """A finished/ended parent with a still-active descendant (same project, via `parent` = run name) is `waiting`.
+
+    Returns the rows with such parents replaced by copies (cached rows are never mutated); `own_state` and
+    `own_outcome` keep the original. A crashed parent stays crashed but gets `children_active`. Cycle-safe.
+    """
+    kids: dict[tuple, list[dict]] = {}
+    for r in rows:
+        if r.get("parent"):
+            kids.setdefault((r.get("project"), r["parent"]), []).append(r)
+
+    def live_desc(r: dict) -> list[dict]:
+        out, seen, todo = [], {(r.get("project"), r["name"])}, [(r.get("project"), r["name"])]
+        while todo:
+            for c in kids.get(todo.pop(), []):
+                k = (c.get("project"), c["name"])
+                if k in seen:
+                    continue
+                seen.add(k)
+                todo.append(k)
+                if c.get("active"):
+                    out.append(c)
+        return out
+
+    res = []
+    for r in rows:
+        if r.get("active") or r.get("state") not in ("finished", "ended", "crashed"):
+            res.append(r)
+            continue
+        live = live_desc(r)
+        if not live:
+            res.append(r)
+            continue
+        n = len(live)
+        if r["state"] == "crashed":
+            res.append({**r, "children_active": n, "note": f"crashed, but {n} child agent(s) still active"})
+            continue
+        live.sort(key=lambda c: (c.get("activity") or {}).get("since") or c.get("last_activity") or "", reverse=True)
+        first = live[0].get("activity") or {}
+        since = max([(c.get("activity") or {}).get("since") or c.get("last_activity") or "" for c in live]) or None
+        text = f"waiting for {n} child agent(s)" + (f": {first['text']}"[:160] if first.get("text") else "")
+        act = {"kind": "task", "text": text, "since": since}
+        try:
+            act["age"] = max(0, round(time.time() - time.mktime(time.strptime(since, "%Y-%m-%dT%H:%M:%S"))))
+        except (TypeError, ValueError):
+            pass
+        dur = r.get("duration")
+        try:  # now runs to the present, not to the parent's last activity
+            dur = max(0, round(time.time() - time.mktime(time.strptime(r["started"], "%Y-%m-%dT%H:%M:%S"))))
+        except (KeyError, TypeError, ValueError):
+            pass
+        d = {**r, "own_state": r["state"], "own_outcome": r.get("outcome"), "state": "waiting", "status": "running",
+             "outcome": None, "active": True, "activity": act,
+             "children_active": n, "duration": dur, "duration_live": dur is not None}
+        res.append(d)
+    return res
+
+
 def _sort(rows: list[dict]) -> list[dict]:
     rows.sort(key=lambda r: r.get("last_activity") or "", reverse=True)
     rows.sort(key=lambda r: not r.get("active"))
@@ -643,7 +701,7 @@ def _sort(rows: list[dict]) -> list[dict]:
 
 
 def project_rows(key: str, plan: bool = True, age: float = claude_sessions.DEFAULT_AGE, git: bool = False) -> list[dict]:
-    return _sort([*api_part(key, git)[0], *extra_part(key, plan, age)])
+    return _sort(propagate_waiting([*api_part(key, git)[0], *extra_part(key, plan, age)]))
 
 
 def all_rows(plan: bool, age: float) -> list[dict]:
@@ -695,7 +753,7 @@ def attention() -> list[dict]:
                             "action": {"type": "local_approve", "run": r["name"], "id": a.get("id")}})
             if r.get("state") == "crashed" and (r.get("idle_seconds") or 0) < 86400:
                 out.append({**base, "kind": "crashed", "text": f"{r.get('title') or r['name']} crashed"[:200]})
-            elif r.get("plan") and r.get("state") == "waiting":
+            elif r.get("plan") and r.get("state") == "waiting" and not r.get("own_state"):  # not a parent waiting on its children
                 out.append({**base, "kind": "waiting", "text": f"{r.get('title') or r['name']} is waiting"[:200]})
     pm = hub.pmjc()
     for a in pm.get("approvals") or []:
@@ -940,7 +998,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(all_rows(plan, age))
             if not self._project(q, p):
                 return
-            return self._json(_sort([*api_part(p, True)[0], *extra_part(p, plan, age)]))
+            return self._json(_sort(propagate_waiting([*api_part(p, True)[0], *extra_part(p, plan, age)])))
         if u.path == "/api/spend":
             p = (q.get("p") or [""])[0] or PINNED or "*"
             if p == "*":
