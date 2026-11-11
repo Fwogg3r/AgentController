@@ -6,7 +6,8 @@
     uv run install.py                      # tool + /api-request + /batchy (asks for the API key once)
     uv run install.py --init PATH          # also set up a project: agentcontroller.toml + secrets dir + key
     uv run install.py --no-dash-task       # skip the always-on dashboard logon task (Windows)
-    uv run install.py --dry-run            # show what would change
+    uv run install.py --local              # also install aider (pinned) for agentlocal, the local-model agents
+    uv run install.py --dry-run            # show the plan and what would change; changes nothing
     uv run install.py --uninstall
 
 Steps:
@@ -18,7 +19,10 @@ Steps:
      into that server's own `env` (its process), never into a global ANTHROPIC_API_KEY.
   4. Windows: a Task Scheduler logon task "AgentController dashboard" running `agentdash --all` hidden
      (--dash-task / --no-dash-task), and ~/.agentcontroller/config.toml with commented defaults.
-  5. Optional --statusline: the toolkit's batch status line (it sources ~/.claude/env, which then holds
+  5. The `roadmap` CLI (WebRoadmap, pinned commit) as a uv tool, for the dashboard's Roadmap tab (asks first; -y skips
+     the question; --no-roadmap skips it). With --local (or when you say yes): aider at a pinned commit.
+  6. Checks for the Claude Code CLI (never installs system software; prints how), then runs `agentdoctor`.
+  7. Optional --statusline: the toolkit's batch status line (it sources ~/.claude/env, which then holds
      the key as well, readable only by scripts that source it).
 
 Every file it overwrites in ~/.claude is backed up to <file>.bak first.
@@ -41,6 +45,12 @@ BATCH_COMMIT = "feb9ff9c5e060ea3abb6829411254222e7d60577"
 BATCH_MODEL = "claude-opus-5-5"  # upstream's default (claude-opus-4-6) is out of date
 API_SKILL = "api-request"  # not "claude-api": that name is Claude Code's built-in API reference skill
 MCP_NAME = "claude-batch"
+# Third-party tools installed from GitHub at pinned commits (bump after testing, like BATCH_COMMIT).
+ROADMAP_SPEC = "git+https://github.com/Fwogg3r/WebRoadmap@108eb29893362f30ef6d7f9ba6b971e82bf9da69"
+AIDER_SPEC = "git+https://github.com/Aider-AI/aider.git@253f0368b873ba30d8ee26e463718f0c03614ddf"
+AIDER_PYTHON = "3.12"  # aider's pinned dependency set is built for 3.12
+CLAUDE_HINT = ("Claude Code (https://docs.claude.com/en/docs/claude-code/setup): `npm install -g @anthropic-ai/claude-code` "
+               "or the native installer on that page")
 
 DRY = False
 
@@ -120,6 +130,91 @@ def install_tool(args) -> None:
                  "or rerun with --no-tool if it's already installed.")
 
 
+def confirm(args, question: str, default: bool) -> bool:
+    """-y answers yes; without a terminal the default stands; otherwise ask."""
+    if args.yes:
+        return True
+    if not sys.stdin or not sys.stdin.isatty():
+        return default
+    ans = input(f"{question} [{'Y/n' if default else 'y/N'}] ").strip().lower()
+    return default if not ans else ans in ("y", "yes")
+
+
+def tool_exe(name: str) -> str | None:
+    """A uv-tool command: on PATH, or in uv's tool bin dir (which may not be on PATH yet)."""
+    if p := shutil.which(name):
+        return p
+    try:
+        d = Path(subprocess.run(["uv", "tool", "dir", "--bin"], capture_output=True, text=True, check=True).stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for c in (d / name, d / (name + ".exe")):
+        if c.exists():
+            return str(c)
+    return None
+
+
+def install_roadmap(args, claude: Path) -> None:
+    """The `roadmap` CLI (WebRoadmap) at a pinned commit, plus its Claude skill."""
+    if args.no_roadmap:
+        return
+    exe = tool_exe("roadmap")
+    if exe:
+        say("skip", "the roadmap CLI is already installed")
+    elif confirm(args, "Install the roadmap CLI (WebRoadmap, for the dashboard's Roadmap tab) with uv?", True):
+        try:
+            run(["uv", "tool", "install", ROADMAP_SPEC])
+        except subprocess.CalledProcessError:
+            say("warn", f"couldn't install the roadmap CLI; try `uv tool install {ROADMAP_SPEC}`")
+            return
+        exe = tool_exe("roadmap")
+    else:
+        say("skip", "roadmap CLI not installed (the Roadmap tab stays empty)")
+        return
+    dest = claude / "skills" / "roadmap"
+    if (dest / "SKILL.md").exists():
+        say("skip", "the roadmap skill is already installed")
+    elif DRY:
+        say("run", f"roadmap install-skill --dest {dest}")
+    elif exe:
+        run([exe, "install-skill", "--dest", str(dest)])
+
+
+def install_aider(args) -> None:
+    """aider for agentlocal, only on request (--local, or yes at the prompt): it is a big install."""
+    if tool_exe("aider"):
+        say("skip", "aider is already installed (agentlocal is tested with commit 253f036; "
+                    f"to match it: uv tool install --force --python {AIDER_PYTHON} {AIDER_SPEC})")
+        return
+    if not args.local and not confirm(args, "Also install aider for agentlocal (local-model agents; LM Studio needed to use it)?", False):
+        say("skip", "aider not installed (agentlocal needs it; rerun with --local)")
+        return
+    try:
+        run(["uv", "tool", "install", "--python", AIDER_PYTHON, AIDER_SPEC])
+    except subprocess.CalledProcessError:
+        say("warn", f"couldn't install aider; try `uv tool install --python {AIDER_PYTHON} {AIDER_SPEC}`")
+
+
+def check_prereqs() -> None:
+    """System software is never installed here; say how when something is missing."""
+    if not shutil.which("claude"):
+        say("warn", "Claude Code CLI not found. The /api-request and /batchy skills and agentpilot need it "
+                    f"(agentctl and agentask don't: the SDK bundles its own). Install {CLAUDE_HINT}.")
+    else:
+        say("ok", "Claude Code CLI found")
+
+
+def run_doctor(args) -> None:
+    exe = None if DRY else tool_exe("agentdoctor")
+    cmd = [exe] if exe else ["uv", "run", "--project", str(REPO), "agentdoctor"]
+    cmd += ["-y"] if args.yes else []
+    say("run", " ".join(cmd))
+    if DRY:
+        return
+    if subprocess.run(cmd).returncode != 0:
+        say("warn", "agentdoctor reports missing required pieces (see above); fix them and rerun `agentdoctor`")
+
+
 def install_api_skill(claude: Path) -> None:
     dst = claude / "skills" / API_SKILL
     for f in (REPO / "skills" / API_SKILL).iterdir():
@@ -138,6 +233,11 @@ def fetch_batch_toolkit(tmp: Path) -> Path:
 
 
 def install_batchy(args, claude: Path, claude_json: Path) -> None:
+    if DRY:  # no clone in a dry run: say what would happen
+        say("plan", f"fetch {BATCH_REPO} @ {BATCH_COMMIT[:7]} (pinned); write {claude / 'mcp' / 'claude_batch_mcp.py'}, "
+                    f"{claude / 'skills' / 'batchy' / 'SKILL.md'}, {claude / 'batches'}; register the {MCP_NAME} MCP server in "
+                    f"{claude_json} if an API key is given")
+        return
     with tempfile.TemporaryDirectory() as t:
         src = fetch_batch_toolkit(Path(t))
         mcp = (src / "mcp" / "claude_batch_mcp.py").read_text(encoding="utf-8")
@@ -335,6 +435,9 @@ def main() -> None:
     ap.add_argument("--key-file", help="read the Anthropic API key from this file instead of prompting")
     ap.add_argument("--no-tool", action="store_true", help="don't (re)install the agentcontroller uv tool")
     ap.add_argument("--no-batchy", action="store_true", help="skip the batch toolkit (/batchy + MCP server)")
+    ap.add_argument("--local", action="store_true", help="also install aider (pinned) for agentlocal, the local-model agents")
+    ap.add_argument("--no-roadmap", action="store_true", help="skip the roadmap CLI (WebRoadmap)")
+    ap.add_argument("--no-doctor", action="store_true", help="don't run agentdoctor at the end")
     ap.add_argument("--statusline", action="store_true", help="also install the batch toolkit's status line")
     ap.add_argument("--claude-dir", default="~/.claude", help="Claude Code config dir (default ~/.claude)")
     ap.add_argument("--claude-json", default="~/.claude.json", help="Claude Code user config (default ~/.claude.json)")
@@ -357,6 +460,9 @@ def main() -> None:
         return
     need("git", "Install git first.")
 
+    if DRY:
+        say("plan", "dry run: only the lines below are printed, nothing is executed or written")
+    check_prereqs()
     install_tool(args)
     install_api_skill(claude)
     init_global_config()
@@ -364,8 +470,12 @@ def main() -> None:
         install_dash_task()
     if not args.no_batchy:
         install_batchy(args, claude, claude_json)
+    install_roadmap(args, claude)
+    install_aider(args)
     if args.init:
         init_project(args, Path(args.init).expanduser().resolve())
+    if not args.no_doctor:
+        run_doctor(args)
     say("done", "restart Claude Code so it picks up the skills and the MCP server. Then: /api-request, /batchy, agentdash")
 
 
