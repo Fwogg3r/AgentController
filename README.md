@@ -97,6 +97,7 @@ terracotta accents; works in a narrow split-screen window). Spec: [docs/unified-
 - **Trees:** runs with a `parent` (`--parent`, `AGENTCONTROLLER_PARENT`, Claude plan subagents) nest under it; a parent collapses to "(n agents)".
 - **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (the project's `docs/roadmap`, with agents linked by `--roadmap ID`) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
 - **Local runs:** a context gauge (tokens of the last call vs the window, per-call history), a thinking pane apart from answer/edits/tests, stage progress, and approval buttons.
+- **Phone layout:** at <= 640px the page switches to a list view and a detail view (back button returns to the list), a bottom tab bar for Roadmap / Jobs / Models, a menu for spend and "+ New agent", and Filters in a bottom sheet. Desktop is unchanged.
 - **Attention queue:** the header badge lists what needs you: local approvals, pmjc approvals, crashes in the last 24 h, waiting Claude sessions.
 - **Global config** `~/.agentcontroller/config.toml` (all keys optional):
 
@@ -104,6 +105,8 @@ terracotta accents; works in a narrow split-screen window). Spec: [docs/unified-
 include = "Z:/shared/agentcontroller/dash.toml"   # merged first; this file's keys win
 [dash]
 port = 8765
+# host = "0.0.0.0"                # LAN viewing; needs remote = true
+# remote = true                   # token auth, see "Watching from other devices"
 scan = ["~/Documents/GitHub"]     # also list repos here that have an agentcontroller.toml
 hide = ["C:/some/repo"]
 [pmjc]
@@ -245,7 +248,7 @@ permission_mode = "auto"
 ### Watching from other devices
 
 `agentdash --remote` accepts requests from any host that carries a token. The token is kept in `<secrets>/dash_token.txt`, created on first use. Open `http://<host>:8765/?token=<token>` once per device; after that a cookie (HttpOnly, SameSite=Strict, 30 days) carries it. POSTs must also be same-origin.
-- **LAN:** `agentdash --remote --host 0.0.0.0`. This is plain HTTP, so anyone on the network who can sniff traffic can read the token.
+- **LAN:** `agentdash --remote --host 0.0.0.0`, or set `host = "0.0.0.0"` and `remote = true` under `[dash]` in `~/.agentcontroller/config.toml` (flags win over config). The config route is what the always-on logon task uses: the task runs plain `agentdash --all`, so reinstalling it with `install.py` keeps LAN viewing. This is plain HTTP, so anyone on the network who can sniff traffic can read the token; on Windows also allow the port in the firewall for the private profile and local subnet only.
 - **Anywhere:** keep the default host and tunnel it, for example `cloudflared tunnel --url http://127.0.0.1:8765` (HTTPS). Put Cloudflare Access in front if the URL must stay private beyond the token.
 
 ## Internet access (Cloudflare Access)
@@ -266,7 +269,8 @@ audit_log = "~/.agentcontroller/access-audit.jsonl"
 ```
 
 - Every request on that listener (pages, API, SSE) must carry a valid `Cf-Access-Jwt-Assertion` (RS256, checked against the team's JWKS, stdlib only), whatever the `Host`. The LAN token of `--remote` is ignored there; the normal port 8765 behaves as before.
-- Levels: `view` (read everything), `operate` (send messages, approve, launch, kill), `admin` (archive, delete worktrees, forget projects, anything unlisted). `grants_file` is `{"version": 1, "services": {"agentdash": {"someone@example.com": "view"}}}`, re-read when it changes; if it is missing or invalid only `super_admin` gets in. The page shows who you are and hides what you may not do (`/api/me`); the server enforces it.
+- Run it next to the tunnel: `cloudflared` publishes a hostname whose origin is `http://127.0.0.1:<listen_port>`, and an Access application on that hostname does the sign-in. The `aud` is that application's AUD tag.
+- Levels: `view` (read everything), `operate` (send messages, approve, launch, kill), `admin` (archive, delete worktrees, forget projects, anything unlisted). `grants_file` is normally written by an external sync that mirrors your own user/permission store into Access policies and this file; agentdash only reads it. Format: `{"version": 1, "services": {"agentdash": {"someone@example.com": "view"}}}`, re-read when it changes; if it is missing or invalid only `super_admin` gets in. The page shows who you are and hides what you may not do (`/api/me`); the server enforces it.
 - POSTs also need `Content-Type: application/json`, `X-AC: 1` and an `Origin` equal to `public_origin`. Every POST and every refused request is appended to the audit log.
 - `operate` can launch agents that spend API money; per-user budget caps are not implemented yet.
 

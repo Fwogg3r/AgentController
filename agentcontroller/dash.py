@@ -1118,18 +1118,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
 
+def resolve_listen(host, remote, dash_cfg: dict) -> tuple[str, bool]:
+    """Flags win; otherwise the [dash] host / remote keys of the global config; otherwise loopback, no token."""
+    if host is None:
+        host = str(dash_cfg.get("host") or "127.0.0.1")
+    if remote is None:
+        remote = bool(dash_cfg.get("remote", False))
+    return host, remote
+
+
 def main(argv: list[str] | None = None) -> int:
     global SESSION_START, TOKEN, ALL_MODE, PINNED, PINNED_ENTRY
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--all", action="store_true", help="serve every project (default when no agentcontroller.toml is found)")
     ap.add_argument("--project", help="pin one project: agentcontroller.toml (or its directory)")
     ap.add_argument("--port", type=int)
-    ap.add_argument("--host", default="127.0.0.1",
-                    help="bind address; 0.0.0.0 for other devices on the LAN (needs --remote)")
-    ap.add_argument("--remote", action="store_true",
-                    help="accept any Host with a token (kept in <secrets>/dash_token.txt); for LAN or a tunnel")
+    ap.add_argument("--host",
+                    help="bind address; 0.0.0.0 for other devices on the LAN (needs --remote). "
+                         "Default: [dash] host in ~/.agentcontroller/config.toml, else 127.0.0.1")
+    ap.add_argument("--remote", action="store_true", default=None,
+                    help="accept any Host with a token (kept in <secrets>/dash_token.txt); for LAN or a tunnel. "
+                         "Default: [dash] remote in ~/.agentcontroller/config.toml")
     ap.add_argument("--session-start", help="ISO timestamp for the session spend figure (default: today 00:00)")
     args = ap.parse_args(argv)
+    args.host, args.remote = resolve_listen(args.host, args.remote, (hub.gconfig().get("dash") or {}))
     from .config import find_project
     found = find_project()
     pin = args.project or (None if args.all else (str(found) if found else None))

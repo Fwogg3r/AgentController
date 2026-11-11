@@ -193,6 +193,8 @@ GLOBAL_CONFIG = """# AgentController global config (read by agentdash --all). Ev
 # include = "Z:/shared/agentcontroller/dash.toml"   # merged first; the keys below win
 [dash]
 # port = 8765
+# host = "0.0.0.0"                  # LAN viewing: bind all interfaces (needs remote = true)
+# remote = true                     # token auth (~/.agentcontroller/dash_token.txt); read by the logon task too
 # scan = ["~/Documents/GitHub"]     # also list repos here that have an agentcontroller.toml
 # hide = ["C:/some/repo"]           # never list these projects
 # [pmjc]

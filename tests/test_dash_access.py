@@ -314,3 +314,11 @@ def test_settings_parsing(tmp_path):
     assert access.settings({}) is None
     assert access.settings({"dash": {"access": {"enabled": True, "team_domain": TEAM}}}) is None  # no aud
     assert access.settings({"dash": {"access": {"enabled": False, "team_domain": TEAM, "aud": ["a"]}}}) is None
+
+
+def test_resolve_listen_flags_and_config():
+    assert dash.resolve_listen(None, None, {}) == ("127.0.0.1", False)
+    cfg = {"host": "0.0.0.0", "remote": True}
+    assert dash.resolve_listen(None, None, cfg) == ("0.0.0.0", True)
+    assert dash.resolve_listen("127.0.0.1", None, cfg) == ("127.0.0.1", True)
+    assert dash.resolve_listen(None, False, cfg) == ("0.0.0.0", False)
