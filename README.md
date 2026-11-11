@@ -47,8 +47,8 @@ It also looks for LM Studio and pmjc on this machine and offers to write what it
 (comments and other keys are kept). `agentdoctor --scan` additionally probes the local /24 subnet for them, after asking.
 
 **4. Open the dashboard.** Restart Claude Code, then open http://127.0.0.1:8765/ (on Windows the installer's logon task keeps it
-running; elsewhere any `agentctl`/`agentask` call, or `agentdash`, starts it). Your project shows up once an agent has run in it,
-or add its parent folder to `scan` in `~/.agentcontroller/config.toml`.
+running; elsewhere any `agentctl`/`agentask` call, or `agentdash`, starts it). The project you gave `--init` is listed right away; any other
+shows up once an agent has run in it, or add its parent folder to `scan` in `~/.agentcontroller/config.toml`.
 
 **5. Run your first agent.** From the project, either press "+ New agent" in the dashboard, or:
 
