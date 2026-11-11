@@ -1062,7 +1062,12 @@ def main(argv: list[str] | None = None) -> int:
                         "toml": (pcfg.root / CONFIG_NAME).is_file(), "exists": True}
     SESSION_START = args.session_start or datetime.now().strftime("%Y-%m-%dT00:00:00")
     port = args.port or (registry.dash_port() if ALL_MODE else pcfg.port)
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stdout is None or sys.stderr is None:  # pythonw (the logon task): no console, log to a file instead
+        log = open(registry.home() / "dash.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or log
+        sys.stderr = sys.stderr or log
+    else:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if args.host not in ("127.0.0.1", "localhost") and not args.remote:
         ap.error("--host other than 127.0.0.1 needs --remote (token auth)")
     tok = None

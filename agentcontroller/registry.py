@@ -167,9 +167,14 @@ def hook_end(agent_id: str, status: str = "done") -> None:
 # ---------- the always-on dashboard ----------
 
 def dash_port() -> int:
+    """AGENTDASH_PORT, else [dash] port in ~/.agentcontroller/config.toml, else 8765 (never a stale dash.json)."""
+    import tomllib
     try:
-        return int(os.environ.get("AGENTDASH_PORT") or (_read(home() / "dash.json", {}) or {}).get("port") or DEFAULT_PORT)
-    except ValueError:
+        if os.environ.get("AGENTDASH_PORT"):
+            return int(os.environ["AGENTDASH_PORT"])
+        cfg = tomllib.loads((home() / "config.toml").read_text(encoding="utf-8"))
+        return int(cfg.get("dash", {}).get("port") or DEFAULT_PORT)
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
         return DEFAULT_PORT
 
 
