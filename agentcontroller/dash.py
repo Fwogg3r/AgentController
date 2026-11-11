@@ -6,6 +6,9 @@
 agentcontroller.toml is found from the cwd; --project pins one project (same code path, `p` optional).
 The project's config is per request (ContextVar behind `CFG`). Projects without a toml are read-only.
 
+With [dash.access] enabled in ~/.agentcontroller/config.toml a second listener (127.0.0.1:<listen_port>) serves
+the Cloudflare tunnel: every request needs a valid Cloudflare Access JWT and a per-user level (access.py).
+
 Reads <runs>/<name>.events.jsonl (falls back to <name>.log for older runs) and the usage log.
 Writes only inbox/pid/archive files, briefs, and launches/stops agents. Never reads or serves key files.
 """
@@ -29,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import access as acc_mod
 from . import claude_sessions, hub, registry
 from .config import CONFIG_NAME, Config, load
 
@@ -751,10 +755,29 @@ def _version() -> str:
         return "dev"
 
 
+def scrub(path: str, obj):
+    """What a non-admin Access user must not see: filesystem paths, service URLs and error text that quote them."""
+    if path == "/api/jobs" and isinstance(obj, dict):
+        return {k: v for k, v in obj.items() if k not in ("url", "error")}
+    if path == "/api/lmstudio" and isinstance(obj, dict):
+        return {h: ({k: v for k, v in d.items() if k not in ("url", "error")} if isinstance(d, dict) else d)
+                for h, d in obj.items()}
+    if path == "/api/projects" and isinstance(obj, list):
+        return [{k: v for k, v in p.items() if k not in ("path", "sources")} for p in obj]
+    if path == "/api/attention" and isinstance(obj, list):
+        return [a for a in obj if a.get("kind") != "pmjc_approval"]
+    return obj
+
+
 # ---------- http ----------
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "AgentDash"
+    access: "acc_mod.Access | None" = None  # set on the subclass served by the Cloudflare listener
+    _who: tuple | None = None
+    _status: int | None = None
+    _abody: dict | None = None
+    _scrub = False
 
     def log_message(self, fmt, *args):  # keep stderr quiet; SSE would flood it
         pass
@@ -781,6 +804,7 @@ class Handler(BaseHTTPRequestHandler):
         return origin is None or origin in {f"http://{h}" for h in ok_hosts}
 
     def _send(self, code: int, body: bytes, ctype: str = "application/json", cookie: str | None = None) -> None:
+        self._status = code
         self.send_response(code)
         if cookie:
             self.send_header("Set-Cookie", cookie)
@@ -791,6 +815,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, obj, code: int = 200) -> None:
+        if self._scrub and code == 200:
+            obj = scrub(urlparse(self.path).path, obj)
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
     def _body(self) -> dict:
@@ -827,22 +853,78 @@ class Handler(BaseHTTPRequestHandler):
             age = claude_sessions.DEFAULT_AGE
         return (q.get("plan") or ["1"])[0] != "0", age
 
+    def _deny(self, code: int, msg: str, method: str, path: str, query: str) -> bool:
+        if method == "POST":
+            self.close_connection = True  # the body is left unread
+        who = self._who or (None, None)
+        self.access.audit(who[0], who[1], method, path, query, None, code)
+        if code == 403 and msg == "no access" and not path.startswith("/api/"):
+            self._send(403, b"<!doctype html><title>agentdash</title><h1>403</h1><p>no access to agentdash</p>", "text/html")
+        else:
+            self._json({"ok": False, "error": msg}, code)
+        return False
+
+    def _gate(self, method: str) -> bool:
+        """Authenticates and authorizes the request; replies and returns False when it is refused."""
+        u = urlparse(self.path)
+        self._who, self._status, self._abody, self._scrub = None, None, None, False
+        if self.access is None:  # the main listener: loopback Host/Origin, or the LAN token with --remote
+            if not self._local_ok():
+                self._json({"ok": False, "error": "forbidden"}, 403)
+                return False
+            if method == "POST" and (not self.headers.get("Content-Type", "").startswith("application/json")
+                                     or self.headers.get("X-AC") != "1"):
+                self._json({"ok": False, "error": "forbidden (POSTs need Content-Type: application/json and X-AC: 1)"}, 403)
+                return False
+            return True
+        # The Cloudflare listener: a valid Access JWT on every request, whatever the Host; the LAN token is ignored.
+        try:
+            self._who = self.access.authenticate(self.headers)
+        except acc_mod.AuthError:
+            return self._deny(401, "unauthorized", method, u.path, u.query)
+        need = acc_mod.required_level(method, u.path)
+        if self._who[1] is None:
+            return self._deny(403, "no access", method, u.path, u.query)
+        if not acc_mod.allows(self._who[1], need):
+            return self._deny(403, f"needs {need} access", method, u.path, u.query)
+        if method == "POST" and not self.access.csrf_ok(self.headers):
+            return self._deny(403, "forbidden (POSTs need Content-Type: application/json, X-AC: 1 and the site's Origin)",
+                              method, u.path, u.query)
+        self._scrub = self._who[1] != "admin"
+        return True
+
     def do_GET(self):
-        if not self._local_ok():
-            return self._json({"ok": False, "error": "forbidden"}, 403)
+        if self._gate("GET"):
+            self._get()
+
+    def do_POST(self):
+        if not self._gate("POST"):
+            return
+        try:
+            self._post()
+        finally:
+            if self.access:
+                u = urlparse(self.path)
+                self.access.audit(self._who[0], self._who[1], "POST", u.path, u.query, self._abody, self._status)
+
+    def _get(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/":
             try:
                 # --remote: the first visit carries ?token=; later requests (fetch, SSE) use the cookie.
                 cookie = (f"ac_token={TOKEN}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
-                          if TOKEN else None)
+                          if TOKEN and not self.access else None)  # never hand the LAN token to the tunnel
                 return self._send(200, PAGE.read_bytes(), "text/html", cookie)
             except OSError:
                 return self._json({"ok": False, "error": "static/index.html missing"}, 500)
         if u.path == "/api/health":
             return self._json({"mode": "all" if ALL_MODE else "project", "version": _version(), "pid": os.getpid(),
                                "projects": len(_pm_cache[1])})
+        if u.path == "/api/me":
+            if self.access:
+                return self._json({"email": self._who[0], "level": self._who[1]})
+            return self._json({"lan": True, "level": "admin"} if TOKEN else {"local": True, "level": "admin"})
         if u.path == "/api/projects":
             return self._json(projects_list())
         if u.path == "/api/jobs":
@@ -895,13 +977,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream(key, name) if name else self._json({"ok": False, "error": "bad run"}, 400)
         self._json({"ok": False, "error": "not found"}, 404)
 
-    def do_POST(self):
-        if not self._local_ok() or not self.headers.get("Content-Type", "").startswith("application/json") \
-                or self.headers.get("X-AC") != "1":
-            return self._json({"ok": False, "error": "forbidden (POSTs need Content-Type: application/json and X-AC: 1)"}, 403)
+    def _post(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        body = self._body()
+        body = self._abody = self._body()
         if u.path == "/api/forget_project":
             key = body.get("p")
             if not isinstance(key, str) or key not in projects_map():
@@ -1084,6 +1163,19 @@ def main(argv: list[str] | None = None) -> int:
     srv = ThreadingHTTPServer((args.host, port), Handler)
     srv.daemon_threads = True
     import threading
+    asrv = None
+    ast = acc_mod.settings(hub.gconfig())
+    if ast:  # Cloudflare Access listener: always needs a JWT, independent of --remote and its token
+        if ast["port"] == port:
+            ap.error("[dash.access] listen_port must differ from the dashboard port")
+        try:
+            handler = type("AccessHandler", (Handler,), {"access": acc_mod.Access(ast)})
+            asrv = ThreadingHTTPServer(("127.0.0.1", ast["port"]), handler)
+            asrv.daemon_threads = True
+            threading.Thread(target=asrv.serve_forever, daemon=True).start()
+            print(f"Cloudflare Access listener on 127.0.0.1:{ast['port']} (every request needs an Access JWT)", flush=True)
+        except OSError as e:
+            print(f"WARNING: Access listener not started: {e}", flush=True)
     threading.Thread(target=lambda: (projects_map(), hub.claude_dirs()), daemon=True).start()  # warm the caches
     what = "all projects" if ALL_MODE else f"project {pcfg.root}"
     print(f"AgentController dashboard: http://127.0.0.1:{port}/  ({what})", flush=True)
@@ -1101,6 +1193,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if asrv:
+            asrv.shutdown()
         if ALL_MODE:
             try:
                 if (registry._read(dashfile, {}) or {}).get("pid") == os.getpid():

@@ -19,6 +19,15 @@ Global config, all keys optional:
     token_file = "Z:/secrets/pmjc/agentdash.token"   # a pmjc API token with the jobs (+ admin for approvals) scope
     [lmstudio.hosts]
     local = "http://127.0.0.1:1234"
+    [dash.access]                       # Cloudflare Access sign-in on a second listener (access.py)
+    enabled = true
+    listen_port = 8766                  # 127.0.0.1 only: the Cloudflare tunnel's origin
+    team_domain = "myteam.cloudflareaccess.com"
+    aud = ["<application AUD tag>"]     # a token must carry one of these
+    super_admin = "you@example.com"     # always "admin"; everyone else comes from grants_file
+    grants_file = "~/.agentcontroller/grants.json"   # {"version":1,"services":{"agentdash":{"a@b.c":"view|operate|admin"}}}
+    public_origin = "https://agentdash.example.com"  # the only Origin accepted on POSTs
+    audit_log = "~/.agentcontroller/access-audit.jsonl"
 """
 from __future__ import annotations
 
