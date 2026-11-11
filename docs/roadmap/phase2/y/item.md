@@ -2,6 +2,7 @@
 title: "First-run install: installer, agentdoctor, quick start"
 status: done
 links: [phase2/a]
+notes+: "Sandbox first-run test (2026-11-11): Quick start passes end to end in an isolated home; fixed -y installing aider, doctor cwd after --init, --init not registering the project, AGENTDASH_PORT ignored in project mode."
 ---
 Fresh-machine install that ends in a working product. `install.py` now also installs the roadmap CLI (WebRoadmap, pinned commit 108eb29, asks first) and its skill, aider at pinned commit 253f036 with `--local`, checks for the Claude Code CLI (prints how to install it, never installs system software), and runs `agentdoctor` last; `--dry-run` prints the whole plan without cloning or writing.
 

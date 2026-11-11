@@ -1210,7 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
         PINNED_ENTRY = {"key": PINNED, "path": str(pcfg.root), "name": pcfg.root.name, "sources": ["pinned"],
                         "toml": (pcfg.root / CONFIG_NAME).is_file(), "exists": True}
     SESSION_START = args.session_start or datetime.now().strftime("%Y-%m-%dT00:00:00")
-    port = args.port or (registry.dash_port() if ALL_MODE else pcfg.port)
+    port = args.port or (registry.dash_port() if ALL_MODE or os.environ.get("AGENTDASH_PORT") else pcfg.port)
     if sys.stdout is None or sys.stderr is None:  # pythonw (the logon task): no console, log to a file instead
         log = open(registry.home() / "dash.log", "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stdout or log
