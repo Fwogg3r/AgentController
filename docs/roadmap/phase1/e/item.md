@@ -1,0 +1,10 @@
+---
+title: "Router: tier profiles per model (context budget, files per stage, thinking budget, permissions, human-in-the-loop)"
+status: done
+links: [phase1/c]
+---
+Owner design (2026-11-08). A router picks a tier for each model and shapes what the model gets: higher tiers get more freedom (bigger stages, more files, whole-repo context, longer thinking, more permissions such as shell or merging, fewer approval gates); lower tiers get tighter scoping (fewer files per stage, a summary instead of whole files, a capped thinking budget, edit-only permissions, a human approval on the stage plan and before any command). The router must not slow higher tiers down: a top tier can skip the decomposition and take the idea whole. Tier profiles are data (TOML), set per model and overridable per session; they connect to the permission profiles and sandbox in phase1/c (dangerous permissions only inside the sandbox).
+
+Public vs personal: the router and the tier format are generic and live in the repo (example profiles only). Model-specific quirks tuned to the owner (Qwen3.8-27B on a 3090: 64k context, thinking control, edit format) go in the owner's dev-tools share (Z:shared, e.g. agentcontroller/tiers.toml), which the tool reads through a configurable path; anyone else points it at their own file.
+
+Done 2026-11-10: tiers are data (four layers: model facts, tier policy, repo `[local]`, environment), validated at load (runner, autonomy). Effective autonomy = min(tier, environment): without AGENTLOCAL_SANDBOX=1 never above `edit`; `locked` additionally gates every test run (staged) and turns off aider's auto-test (passthrough). New tier keys: `map_tokens` (aider repo map; 0 for staged), `max_replans`; new model keys: `aider_settings` (extra aider model settings), and `sampling`/`max_output` now reach aider via `extra_params`. Passthrough tiers take `--files` and get the tier's instruction file via `--read`. Unit tests cover the layer load, autonomy cap and gates. shell/full autonomy stay sandbox-only (phase1/c).
