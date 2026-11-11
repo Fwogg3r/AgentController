@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 dist/
 .agentcontroller/
+
+# personal project config: canonical copy in Z:\sharedgentcontroller (symlinked here)
+/agentcontroller.toml

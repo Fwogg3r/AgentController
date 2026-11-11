@@ -1,5 +1,0 @@
-# AgentController's own project config: keys live in the shared secrets folder, not in the repo.
-[paths]
-secrets = "Z:/secrets/agents/anthropic"
-key_file = "anthropic.key"
-admin_key_file = "anthropic_admin.key"
