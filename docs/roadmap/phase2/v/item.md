@@ -1,9 +1,8 @@
 ---
 title: Mobile layout for agentdash
 status: done
-links: []
+links: [phase2/a]
 ---
-
 Phones (<= 640px) now use two views instead of the side-by-side layout that piled up the horizontal run strip: a list view (project chips, Filters button, vertical run rows) and a detail view (sticky "‹ Agents" back bar, collapsible run header, transcript, composer pinned above the safe area). Selecting a run pushes a history entry, so the browser back button returns to the list. Roadmap/Jobs/Models are in a bottom tab bar (hidden in the detail view); a project select sits in the Roadmap header.
 
 **Notes**
