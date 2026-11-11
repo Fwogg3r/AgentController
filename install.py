@@ -200,6 +200,15 @@ GLOBAL_CONFIG = """# AgentController global config (read by agentdash --all). Ev
 # token_file = "Z:/secrets/pmjc/agentdash.token"
 # [lmstudio.hosts]
 # local = "http://127.0.0.1:1234"
+# [dash.access]       # Cloudflare Access sign-in on a second listener for a tunnel (see README "Internet access")
+# enabled = true
+# listen_port = 8766
+# team_domain = "myteam.cloudflareaccess.com"
+# aud = ["<application AUD tag>"]
+# super_admin = "you@example.com"
+# grants_file = "~/.agentcontroller/grants.json"
+# public_origin = "https://agentdash.example.com"
+# audit_log = "~/.agentcontroller/access-audit.jsonl"
 """
 
 

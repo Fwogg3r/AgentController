@@ -227,23 +227,26 @@ table.t th { color:var(--muted); font-weight:600; }
   #tabs { overflow:auto; }
   .rmcol { width:240px; }
 }
+body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admin { display:none !important; }
+#who { font-size:12px; color:var(--muted, #888); margin-left:auto; }
 </style>
 </head>
 <body>
 <header>
   <div id="logo"></div>
   <h1 id="title">Agents</h1>
-  <button class="primary" id="newbtn" disabled>+ New agent</button>
+  <button class="primary need-operate" id="newbtn" disabled>+ New agent</button>
   <div class="spend">
     <span id="sp-label" title="logged API usage vs the cap">total</span> <b id="sp-total">-</b> / <span id="sp-cap">-</span>
     <span class="bar" id="sp-bar"><i></i></span>
     <span title="since the session start">session <b id="sp-sess">-</b></span>
-    <button id="billed" title="Calls tools/api_usage.py --json (lags by hours); needs a single project">actual billed</button>
+    <button id="billed" class="need-operate" title="Calls tools/api_usage.py --json (lags by hours); needs a single project">actual billed</button>
     <span id="billed-out" class="mono"></span>
   </div>
   <div id="lmchips"></div>
   <button id="attn" class="zero" title="things that need you">needs me <span class="badge" id="attn-n">0</span></button>
   <div id="attn-pop" hidden></div>
+  <span id="who" hidden></span>
 </header>
 <main>
   <div id="sidewrap">
@@ -289,7 +292,7 @@ table.t th { color:var(--muted); font-weight:600; }
       </div>
       <div id="stream"><div class="empty">Select a run.</div></div>
       <div id="spinner"></div>
-      <div id="composer">
+      <div id="composer" class="need-operate">
         <textarea id="text" placeholder="Message for the selected run (or text to forward). Click a line to select it for forwarding."></textarea>
         <div class="row">
           <button class="primary" id="send">Send to agent</button>
@@ -298,7 +301,7 @@ table.t th { color:var(--muted); font-weight:600; }
           <span class="hint" id="hint"></span>
         </div>
       </div>
-      <details id="primarybox">
+      <details id="primarybox" class="need-operate">
         <summary>Message primary session (the coordinator)</summary>
         <textarea id="ptext" placeholder="Goes to primary_inbox.jsonl; the coordinator is woken by tools/wait_primary.py"></textarea>
         <div class="row" style="margin-top:6px"><button class="primary" id="psend">Send to primary</button><span class="hint" id="phint"></span></div>
@@ -652,7 +655,7 @@ function drawProjects() {
     d.append(cnt);
     const sub = el("span", "sub"); sub.append(el("span", "", last ? "active " + ago(last) : ""));
     if (forgettable) {
-      const f = el("button", "fg", "forget"); f.title = "hide this project from the list";
+      const f = el("button", "fg need-admin", "forget"); f.title = "hide this project from the list";
       f.onclick = ev => { ev.stopPropagation(); confirmThen("Forget " + name + "?", "Hides this project from the dashboard until an agent registers there again. Nothing on disk is deleted.", async () => { const r = await post("/api/forget_project", {}, { p: key }); if (r.ok === false) alert(r.error); if (sel === key) selectProject(ALL); loadProjects(); }); };
       sub.append(f);
     }
@@ -797,14 +800,14 @@ function drawRunHead() {
   if (r.duration != null) b.append(` · worked ${dur(worked(r))}${r.duration_live ? " (running)" : ""}${r.started ? " · started " + String(r.started).replace("T", " ") : ""}`);
   body.append(b, el("div", "commits mono", (r.commits || []).join("\n")));
   const live = r.active, act = el("div", "actions");
-  const btn = (label, cls, fn, off) => { const x = el("button", cls, label); x.disabled = !!off; x.onclick = fn; act.append(x); };
+  const btn = (label, cls, fn, off, need) => { const x = el("button", cls + (need ? " need-" + need : ""), label); x.disabled = !!off; x.onclick = fn; act.append(x); };
   const std = !r.oneshot && !r.plan && !r.local && r.kind !== "other";
   if (std) btn("Kill process tree", "danger", () => confirmThen("Kill " + r.name + "?",
     "Terminates the whole process tree immediately. Use only if a graceful stop did not work. The spend so far is logged.",
-    () => act2("/api/kill", r)), !r.pid_alive);
+    () => act2("/api/kill", r)), !r.pid_alive, "operate");
   if (!r.plan && !r.local && r.kind !== "other") btn("Remove from list", "", () => confirmThen("Archive " + r.name + "?",
-    "Moves its logs to agent_runs/archive/. The worktree and branch stay.", () => act2("/api/archive", r)), live);
-  if (std) btn("Delete worktree", "danger", () => deleteWorktree(r), live || !r.worktree);
+    "Moves its logs to agent_runs/archive/. The worktree and branch stay.", () => act2("/api/archive", r)), live, "admin");
+  if (std) btn("Delete worktree", "danger", () => deleteWorktree(r), live || !r.worktree, "admin");
   body.append(act);
   h.append(ic, body);
   if (r.local) drawLocalStatic(r);
@@ -1018,7 +1021,7 @@ function drawLocalStatic(r) {
       const res = await post("/api/local_approve", { p: r.project }, { run: r.name, id: ap.id, approve });
       if (res.ok === false) alert(res.error || "failed"); loadRuns(); loadAttention();
     };
-    const y = el("button", "primary sm", "Approve"), n = el("button", "danger sm", "Deny");
+    const y = el("button", "primary sm need-operate", "Approve"), n = el("button", "danger sm need-operate", "Deny");
     y.onclick = decide(true); n.onclick = decide(false); d.append(y, n); a.append(d);
   }
 }
@@ -1286,7 +1289,7 @@ function drawAttention() {
         if (res.ok === false) alert(res.error || "failed");
         loadRuns(); loadAttention();
       };
-      const y = el("button", "primary sm", "Approve"), n = el("button", "danger sm", "Deny");
+      const y = el("button", "primary sm need-operate", "Approve"), n = el("button", "danger sm need-operate", "Deny");
       y.onclick = decide(true); n.onclick = decide(false); bx.append(y, n); b.append(bx);
     }
     pop.append(it);
@@ -1328,6 +1331,13 @@ function fitNames() {
 
 // ---- start ----
 (async () => {
+  // who am I: the Cloudflare Access listener limits what the user may do; the server enforces it, this only hides buttons
+  const me = await jget("/api/me");
+  if (me && me.level) {
+    document.body.classList.add("lv-" + me.level);
+    const w = $("#who"); w.hidden = false;
+    w.textContent = (me.email || (me.lan ? "LAN" : "local")) + " · " + me.level;
+  }
   await loadProjects();
   setNewBtn(); loadCfg(); loadSpend(); loadAttention(); loadLms();
   await loadRuns();

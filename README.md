@@ -248,6 +248,28 @@ permission_mode = "auto"
 - **LAN:** `agentdash --remote --host 0.0.0.0`. This is plain HTTP, so anyone on the network who can sniff traffic can read the token.
 - **Anywhere:** keep the default host and tunnel it, for example `cloudflared tunnel --url http://127.0.0.1:8765` (HTTPS). Put Cloudflare Access in front if the URL must stay private beyond the token.
 
+## Internet access (Cloudflare Access)
+
+agentdash can be reached from the internet through a Cloudflare tunnel with Cloudflare Access sign-in and per-user permission levels.
+Enable a second listener in `~/.agentcontroller/config.toml` (all keys in `agentcontroller/hub.py`):
+
+```toml
+[dash.access]
+enabled = true
+listen_port = 8766                  # 127.0.0.1 only: point the tunnel's origin here
+team_domain = "myteam.cloudflareaccess.com"
+aud = ["<Access application AUD tag>"]
+super_admin = "you@example.com"     # always admin
+grants_file = "~/.agentcontroller/grants.json"
+public_origin = "https://agentdash.example.com"
+audit_log = "~/.agentcontroller/access-audit.jsonl"
+```
+
+- Every request on that listener (pages, API, SSE) must carry a valid `Cf-Access-Jwt-Assertion` (RS256, checked against the team's JWKS, stdlib only), whatever the `Host`. The LAN token of `--remote` is ignored there; the normal port 8765 behaves as before.
+- Levels: `view` (read everything), `operate` (send messages, approve, launch, kill), `admin` (archive, delete worktrees, forget projects, anything unlisted). `grants_file` is `{"version": 1, "services": {"agentdash": {"someone@example.com": "view"}}}`, re-read when it changes; if it is missing or invalid only `super_admin` gets in. The page shows who you are and hides what you may not do (`/api/me`); the server enforces it.
+- POSTs also need `Content-Type: application/json`, `X-AC: 1` and an `Origin` equal to `public_origin`. Every POST and every refused request is appended to the audit log.
+- `operate` can launch agents that spend API money; per-user budget caps are not implemented yet.
+
 ## Security model
 
 - Binds to `127.0.0.1` by default; requests need a matching `Host`, and POSTs a matching `Origin` and a JSON content type (blocks DNS rebinding and cross-site forms).
