@@ -36,6 +36,55 @@ def paged(path: str, params: list[tuple[str, str]], key: str) -> list[dict]:
         page = body["next_page"]
 
 
+CACHE_SECS = 900  # the cost report lags by hours anyway; don't hit the Admin API on every call
+
+
+def actual_spend(cfg, force: bool = False) -> float | None:
+    """Org-wide actual cost since the budget period began, from the Admin API; None if unavailable.
+
+    Cached for 15 minutes in <secrets>/actual_spend.json. Never raises: no admin key, no network or an
+    HTTP error just means "no cross-check" (the caller falls back to the logged estimate).
+    """
+    import time
+    if not cfg.admin_key_file.exists():
+        return None
+    since = cfg.budget_since
+    if not since:
+        try:
+            first = cfg.usage_log.read_text(encoding="utf-8").lstrip().splitlines()[0]
+            since = json.loads(first)["ts"][:10]
+        except (OSError, IndexError, KeyError, ValueError):
+            since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    cache = cfg.secrets / "actual_spend.json"
+    try:
+        c = json.loads(cache.read_text(encoding="utf-8"))
+        if not force and c.get("since") == since and time.time() - c["fetched"] < CACHE_SECS:
+            return float(c["usd"])
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        key = cfg.admin_key_file.read_text(encoding="utf-8").strip()
+        cost = paged("cost_report", [("starting_at", f"{since}T00:00:00Z"), ("limit", "31")], key)
+        usd = sum(float(r.get("amount", "0")) / 100.0 for b in cost for r in b.get("results", []))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    try:
+        cache.write_text(json.dumps({"since": since, "usd": usd, "fetched": time.time()}), encoding="utf-8")
+    except OSError:
+        pass
+    return usd
+
+
+def effective_spend(cfg, logged: float) -> tuple[float, float | None]:
+    """(spend to count against the cap, actual-from-admin-API or None): the larger of the two.
+
+    The usage log is real-time but misses anything not made through these tools; the admin figure sees
+    everything but lags. Taking the max never under-counts either way.
+    """
+    actual = actual_spend(cfg)
+    return (max(logged, actual) if actual is not None else logged), actual
+
+
 def print_by_key(since: str, key: str, own_key: str) -> int:
     names = {k["id"]: (k.get("name", "?"), k.get("partial_key_hint", "")) for k in get("api_keys", [("limit", "100")], key).get("data", [])}
     usage = paged("usage_report/messages", [("starting_at", since), ("group_by[]", "api_key_id"), ("group_by[]", "model"),

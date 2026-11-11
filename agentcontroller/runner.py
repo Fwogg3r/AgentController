@@ -404,10 +404,15 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"unknown model {model!r}; configured: {', '.join(cfg.models)}")
     model_id = cfg.models[model]["id"]
 
-    spent = logged_spend(cfg)
+    from .usage import effective_spend
+    spent, actual = effective_spend(cfg, logged_spend(cfg))  # max(logged estimate, actual Admin API spend)
     if cfg.cap is not None and spent + args.budget > cfg.cap:
-        print(f"[refused] logged ${spent:.2f} + run budget ${args.budget:.2f} exceeds cap ${cfg.cap:.2f}", file=sys.stderr)
+        print(f"[refused] {'actual' if actual is not None and actual >= spent else 'logged'} ${spent:.2f} + run budget ${args.budget:.2f} exceeds cap ${cfg.cap:.2f}", file=sys.stderr)
         return 3
+    if cfg.cap is not None and cfg.cap - spent < cfg.min_remaining and not os.environ.get("AGENTCONTROLLER_FORCE"):
+        print(f"[refused] remaining ${cfg.cap - spent:.2f} is below the ${cfg.min_remaining:.2f} floor: use the plan "
+              "(set AGENTCONTROLLER_FORCE=1 only if the owner insists)", file=sys.stderr)
+        return 4
 
     base = args.base or cfg.default_base
     wt = cfg.worktrees / args.name

@@ -142,8 +142,15 @@ and the agent has answered their notification; closing the stream earlier breaks
 ## One-shot calls (`agentask`)
 
 ```sh
-agentask "prompt" -f file.rs -m opus -e high -o answer.md   # also: --spend, --backfill
+agentask "prompt" -f file.rs -m opus -e high -o answer.md   # also: --spend, --balance, --backfill
 ```
+
+**Low-balance guard.** The Anthropic API exposes no account balance, so "remaining" is `[budget] cap` minus the
+larger of the logged spend and the **actual** org-wide spend from the Admin API (`agentusage`'s cost report, since
+`[budget] since = "YYYY-MM-DD"`, default the first usage-log entry; cached 15 min; skipped without an admin key).
+The max never under-counts: the log is real-time but misses other callers, the Admin figure sees everything but lags. `agentask --balance` prints it (exit 4 when it is below `[budget] min_remaining`, default $5).
+`agentask` and `agentctl` refuse to start below that floor and tell the caller to use the plan (a Claude Code
+subagent) instead; `agentask --force` (or `AGENTCONTROLLER_FORCE=1` for `agentctl`) overrides it.
 
 A single Messages API call (key from the configured key file, budget refusal from the cap, `[oneshot]` in
 the toml for the system prompt and default model/effort). Each call is recorded as a run (`kind: oneshot` in

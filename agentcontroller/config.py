@@ -41,6 +41,10 @@ class Config:
     runs: Path
     briefs: Path
     usage_log: Path
+    # below this much remaining (cap - logged spend), API calls are refused so the work goes to the plan
+    min_remaining: float = 5.0
+    # start of the budget period (YYYY-MM-DD) for the admin-API cross-check; default: first usage-log entry
+    budget_since: str | None = None
     deny: list[str] = field(default_factory=list)
     path_extra: list[str] = field(default_factory=list)
     rules: str = DEFAULT_RULES
@@ -120,6 +124,8 @@ def load(project: str | Path | None = None) -> Config:
         key_file=rel(paths["key_file"], secrets) if "key_file" in paths else secrets / "api.key",
         admin_key_file=rel(paths["admin_key_file"], secrets) if "admin_key_file" in paths else secrets / "admin.key",
         cap=float(cap) if cap is not None else None,
+        min_remaining=float(budget.get("min_remaining", 5.0)),
+        budget_since=budget.get("since"),
         worktrees=rel(paths.get("worktrees", ".claude/worktrees")),
         runs=rel(paths["runs"]) if "runs" in paths else secrets / "agent_runs",
         briefs=rel(paths.get("briefs", "briefs")),

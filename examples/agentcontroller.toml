@@ -13,6 +13,8 @@ briefs = "briefs"                     # briefs/<name>.md written by the dashboar
 [budget]
 cap = 25.0                            # hard cap in USD across all logged runs; omit for none
 # cap_file = "budget.txt"             # alternatively a file under `secrets` holding the number
+# since = "2026-11-01"              # start of the budget period for the Admin API cross-check (default: first usage-log entry)
+min_remaining = 5.0                   # refuse API calls (agentask, agentctl) when cap - logged spend falls below this; use the plan instead
 
 [agent]
 default_model = "sonnet"

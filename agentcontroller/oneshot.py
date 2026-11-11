@@ -49,6 +49,27 @@ def logged_spend(cfg: Config) -> float:
     return total
 
 
+def counted_spend(cfg: Config) -> tuple[float, float, float | None]:
+    """(spend counted against the cap, logged estimate, actual from the Admin API or None)."""
+    from .usage import effective_spend
+    logged = logged_spend(cfg)
+    spent, actual = effective_spend(cfg, logged)
+    return spent, logged, actual
+
+
+def balance_ok(cfg: Config, spent: float) -> bool:
+    """True when there is no cap, or the remaining budget is at least [budget].min_remaining."""
+    return cfg.cap is None or cfg.cap - spent >= cfg.min_remaining
+
+
+def balance_line(cfg: Config, spent: float) -> str:
+    if cfg.cap is None:
+        return f"no budget cap set (logged spend ${spent:.2f}): API usable; the true account balance is not exposed by the API"
+    left = cfg.cap - spent
+    verdict = "API ok" if balance_ok(cfg, spent) else f"LOW (< ${cfg.min_remaining:.2f}): use the plan"
+    return f"remaining ${left:.2f} of ${cfg.cap:.2f} budget (spent ${spent:.2f}); {verdict}"
+
+
 def ts_str(t: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))
 
@@ -239,6 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--name", help="run name (default ask-<time>-<model>)")
     ap.add_argument("--project", help="agentcontroller.toml or its directory (default: walk up from the cwd)")
     ap.add_argument("--spend", action="store_true", help="print estimated spend and exit")
+    ap.add_argument("--balance", action="store_true",
+                    help="print the remaining budget (cap - spend) and whether the API is worth using; exit 4 if not")
+    ap.add_argument("--force", action="store_true", help="ignore the low-balance guard (only when the owner says to)")
     ap.add_argument("--backfill", action="store_true", help="import old usage-log lines as one-shot runs and exit")
     args = ap.parse_args(argv)
     cfg = load(args.project)
@@ -246,13 +270,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.backfill:
         print(f"imported {backfill(cfg)} one-shot runs")
         return 0
-    spent, cap = logged_spend(cfg), cfg.cap
+    spent, logged, actual = counted_spend(cfg)
+    cap = cfg.cap
     if args.spend:
-        print(f"estimated spend: ${spent:.4f}" + (f" of ${cap:.2f} budget" if cap is not None else " (no budget set)"))
+        print(f"estimated spend: ${logged:.4f}" + (f" logged, ${actual:.4f} actual (Admin API)" if actual is not None else "") + (f" of ${cap:.2f} budget" if cap is not None else " (no budget set)"))
         return 0
+    if args.balance:
+        print(balance_line(cfg, spent) + (f" [logged ${logged:.2f}, actual ${actual:.2f}]" if actual is not None
+                                          else " [no Admin API cross-check]"))
+        return 0 if balance_ok(cfg, spent) else 4
     if cap is not None and spent >= cap:
         print(f"[refused] estimated spend ${spent:.2f} has reached the ${cap:.2f} budget", file=sys.stderr)
         return 3
+    if not args.force and not balance_ok(cfg, spent):
+        print(f"[refused] {balance_line(cfg, spent)}. Use the plan (a Claude Code subagent) instead, "
+              "or pass --force if the owner insists.", file=sys.stderr)
+        return 4
     if args.model and args.model not in cfg.models:
         ap.error(f"unknown model '{args.model}' (known: {', '.join(cfg.models)})")
     prompt = args.prompt if args.prompt else sys.stdin.read()
