@@ -96,7 +96,9 @@ def load(project: str | Path | None = None) -> Config:
     else:
         toml = find_project()
     raw = tomllib.loads(toml.read_text(encoding="utf-8")) if toml and toml.is_file() else {}
-    root = toml.parent if toml and toml.is_file() else Path.cwd().resolve()
+    has_toml = bool(toml and toml.is_file())
+    # A directory without a toml is its own root (read-only projects in the unified dashboard).
+    root = toml.parent if has_toml else (p if project and p.is_dir() else Path.cwd().resolve())
     paths, budget, agent, dash, pilot, oneshot, claude = (raw.get(k, {}) for k in ("paths", "budget", "agent", "dash", "pilot", "oneshot", "claude"))
 
     def rel(v: str, base: Path = root) -> Path:
@@ -104,7 +106,7 @@ def load(project: str | Path | None = None) -> Config:
         return q if q.is_absolute() else base / q
 
     secrets = rel(os.environ.get("AGENTCONTROLLER_SECRETS") or paths.get("secrets", ".agentcontroller"))
-    if not secrets.exists() and not os.environ.get("AGENTCONTROLLER_SECRETS"):
+    if has_toml and not secrets.exists() and not os.environ.get("AGENTCONTROLLER_SECRETS"):
         # Secrets are gitignored, so a git worktree of the project doesn't contain them.
         main = _main_checkout(root)
         alt = rel(paths.get("secrets", ".agentcontroller"), main) if main else None

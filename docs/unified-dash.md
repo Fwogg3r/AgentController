@@ -22,7 +22,7 @@ Decision record: [DECISIONS.md](DECISIONS.md) "Unified dashboard"; review: [revi
 |---|---|
 | GET `/api/health` | `{"mode": "all"|"project", "version", "pid", "projects": N}` (no auth beyond Host check) |
 | GET `/api/projects` | `[{key, name, path, toml, roadmap, exists, sources, active, waiting, crashed, total, last_activity, models:[...], spend:{total,cap}|null}]`, sorted active first then last activity |
-| GET `/api/runs?p=KEY&plan_age=S&plan=0|1` | the project's runs: API (agentctl/agentask/pilot, as today), Claude Code sessions from **all** its `~/.claude/projects` dirs (main checkout + worktrees), and registry runs (`hub.registered_runs`). Every row gets `project` (key) and `project_name`, plus `provider` (`anthropic`, `lmstudio`, `plan`, other) |
+| GET `/api/runs?p=KEY&plan_age=S&plan=0|1` | the project's runs: API (agentctl/agentask/pilot, as today), Claude Code sessions from **all** its `~/.claude/projects` dirs (main checkout + worktrees), and registry runs (`hub.registered_runs`). Every row gets `project` (key) and `project_name`, plus `provider` (`anthropic`, `lmstudio`, `plan`, other) and `parent` (name of the run that spawned it, same project, or null; from the registry record's `parent`, set from `$AGENTCONTROLLER_PARENT` / `--parent`; Claude plan subagents have it already) |
 | GET `/api/runs?p=*` | all projects merged (same row shape) |
 | GET `/api/stream?p=KEY&run=NAME` | SSE as today. For a local run: replay + tail `events.jsonl` (lines as-is), and tail `thinking.txt` / `answer.txt` as `{"kind":"local_thinking","text":chunk}` / `{"kind":"local_answer","text":chunk}` |
 | GET `/api/spend?p=KEY` | as today, for that project (no `p` or `*`: sum over projects with a toml, cap null) |

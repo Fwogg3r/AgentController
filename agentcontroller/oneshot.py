@@ -259,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-tokens", type=int, default=64000)
     ap.add_argument("--name", help="run name (default ask-<time>-<model>)")
     ap.add_argument("--project", help="agentcontroller.toml or its directory (default: walk up from the cwd)")
+    ap.add_argument("--parent", help="name of the run that spawned this one (default $AGENTCONTROLLER_PARENT)")
+    ap.add_argument("--roadmap", help="roadmap item id this ask belongs to")
     ap.add_argument("--spend", action="store_true", help="print estimated spend and exit")
     ap.add_argument("--balance", action="store_true",
                     help="print the remaining budget (cap - spend) and whether the API is worth using; exit 4 if not")
@@ -298,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
     res = ask(cfg, prompt, args.file, args.model, args.effort, args.out, args.max_tokens, args.name,
               echo=lambda t: print(t, end="", flush=True))
     print()
+    from . import registry  # one call: registered once it is over (its name is chosen inside ask)
+    registry.hook_start(cfg.root, res["name"], "oneshot", name=res["name"], model=res.get("model"),
+                        parent=args.parent, roadmap=args.roadmap)
+    registry.hook_end(res["name"], "done" if res["ok"] else "failed")
     if res["error"]:
         print(f"[error] {res['error']}", file=sys.stderr)
     if res["stop_reason"] in ("refusal", "max_tokens"):

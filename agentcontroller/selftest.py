@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-PORT = 8799
+PORT = int(os.environ.get("AGENTDASH_SELFTEST_PORT", 8799))
 PKG_PARENT = str(Path(__file__).resolve().parent.parent)
 
 STUB = r'''
@@ -40,7 +40,7 @@ with (proj / ".ac" / "api_usage.jsonl").open("a") as f: f.write(json.dumps({"ts"
 def req(path, body=None, host=None, timeout=10):
     r = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", method="POST" if body is not None else "GET",
                                data=json.dumps(body).encode() if body is not None else None,
-                               headers={"Content-Type": "application/json", **({"Host": host} if host else {})})
+                               headers={"Content-Type": "application/json", "X-AC": "1", **({"Host": host} if host else {})})
     try:
         with urllib.request.urlopen(r, timeout=timeout) as f:
             return f.status, json.loads(f.read().decode() or "null") if "json" in f.headers.get("Content-Type", "") else f.read().decode()
@@ -79,7 +79,8 @@ def main() -> int:
     runs = proj / ".ac" / "agent_runs"
     runs.mkdir(parents=True)
     proc = subprocess.Popen([sys.executable, "-m", "agentcontroller.dash", "--project", str(proj), "--port", str(PORT)],
-                            env={**os.environ, "PYTHONPATH": PKG_PARENT}, stdout=subprocess.PIPE)
+                            env={**os.environ, "PYTHONPATH": PKG_PARENT, "AGENTCONTROLLER_NO_DASH": "1",
+                                 "AGENTCONTROLLER_HOME": tempfile.mkdtemp()}, stdout=subprocess.PIPE)
     ok = True
 
     def check(label, cond, extra=""):
@@ -147,6 +148,17 @@ def main() -> int:
         (runs / "evil.events.jsonl").write_text(json.dumps({"kind": "start", "branch": "main", "base": "main", "worktree": str(proj)}) + "\n"
                                                 + json.dumps({"kind": "end"}) + "\n")
         check("main/primary tree refused", req("/api/worktree_delete?run=evil", {"discard": True})[0] == 403 and (proj / "f.txt").exists())
+        r = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/archive?run=t1", method="POST", data=b"{}",
+                                   headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(r, timeout=5)
+            noac = 200
+        except urllib.error.HTTPError as e:
+            noac = e.code
+        check("POST without X-AC refused", noac == 403)
+        check("health", req("/api/health")[1]["mode"] == "project")
+        pl = req("/api/projects")[1]
+        check("projects lists the pinned one", len(pl) == 1 and pl[0]["toml"] and pl[0]["total"] >= 1, pl)
         check("bad host refused", req("/api/runs", host="evil.com")[0] == 403)
         return 0 if ok else 1
     finally:
