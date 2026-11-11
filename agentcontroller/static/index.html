@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141413">
+<link rel="icon" href="data:,">
 <title>Agents</title>
 <style>
 /* Claude Code's terminal look: dark always. */
@@ -13,7 +15,7 @@
 }
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
-body { margin:0; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column;
+body { margin:0; background:var(--bg); color:var(--ink); height:100vh; height:100dvh; display:flex; flex-direction:column;
   font:13.5px/1.5 ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,monospace; }
 code,pre,.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-size:12.5px; }
 header { display:flex; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; position:relative; }
@@ -212,29 +214,163 @@ table.t th { color:var(--muted); font-weight:600; }
 .sect { margin:14px 0 6px; font-size:13px; color:var(--accent); }
 .host { border:1px solid var(--line); border-radius:12px; padding:8px 12px; margin-bottom:10px; background:var(--card); }
 .host h3 { margin:0 0 4px; font-size:14px; }
+/* mobile-only pieces are hidden on desktop */
+#hmenu { display:contents; }
+#attn { order:5; } #who { order:10; }
+#menubtn, #mbar, #mtabs, #toolbar, #sheetbg, .sheethd, #psel, .rhx { display:none; }
+#fbox { display:contents; }
+.kl.kl-open { display:none; }
+/* ===== phones: two views (list | detail), bottom tab bar, header menu, filter sheet ===== */
 @media (max-width:640px) {
-  main { flex-direction:column; }
-  #sidewrap { display:block; }
+  html { -webkit-text-size-adjust:100%; overflow-x:hidden; }
+  body { font-size:14px; overflow-x:hidden; -webkit-tap-highlight-color:transparent; }
+  button, .run, .proj, .card, .attn-item, label, summary { -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
+  button { min-height:44px; padding:6px 14px; font-size:14px; border-radius:12px; }
+  button.sm { min-height:36px; font-size:13px; padding:2px 12px; }
+  input, textarea, select { font-size:16px !important; }
+  input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); flex:none; }
+  .chip { font-size:12.5px; padding:2px 10px; }
+  .hint, .sys { font-size:13px; }
+  * { scrollbar-width:thin; }
+  /* header: one compact row */
+  header { flex-wrap:nowrap; gap:8px; padding:calc(6px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 6px calc(10px + env(safe-area-inset-left)); }
+  #logo { flex:none; width:32px; height:32px; overflow:hidden; } #logo svg { width:32px; height:32px; }
+  header h1 { flex:1; min-width:0; font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #attn { padding:6px 10px; font-size:13px; flex:none; }
+  #menubtn { display:block; flex:none; width:44px; padding:0; font-size:20px; line-height:1; }
+  #hmenu { display:none; position:absolute; left:0; right:0; top:100%; z-index:25; flex-direction:column; align-items:stretch; gap:10px;
+    padding:12px calc(12px + env(safe-area-inset-right)) 14px calc(12px + env(safe-area-inset-left)); background:var(--card); border-bottom:1px solid var(--line);
+    max-height:70vh; overflow:auto; box-shadow:0 12px 24px rgba(0,0,0,.5); }
+  header.menu-open #hmenu { display:flex; }
+  #hmenu .spend { min-width:0; flex:none; font-size:13.5px; gap:8px 12px; }
+  #hmenu .bar { width:100%; order:9; }
+  #who { margin-left:0; font-size:13px; }
+  #attn-pop { left:8px; right:8px; width:auto; top:100%; }
+  .attn-item { min-height:44px; }
+  /* two views */
+  main { flex-direction:column; min-height:0; }
+  #sidewrap { display:flex; flex:1; min-height:0; min-width:0; }
   #grip { display:none; }
-  #side { width:auto !important; border-right:0; border-bottom:1px solid var(--line); max-height:40vh; }
-  #projects { flex-direction:row; overflow-x:auto; overflow-y:hidden; max-height:none; }
-  .proj { min-width:150px; }
-  #runs { flex-direction:row; overflow:auto; }
-  .run { min-width:190px; }
-  .bar { width:90px; }
-  .lcols { grid-template-columns:1fr; }
+  #side { width:auto !important; flex:1; min-width:0; border-right:0; padding:0 calc(10px + env(safe-area-inset-right)) 12px calc(10px + env(safe-area-inset-left));
+    gap:8px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; scrollbar-gutter:auto; overflow-x:hidden; }
+  #pane { flex:1; min-height:0; }
+  body.tab-agents:not(.mob-detail) #pane { display:none; }
+  body.tab-agents.mob-detail #sidewrap { display:none; }
+  body:not(.tab-agents) #sidewrap { display:none; }
+  /* bottom tab bar (Agents | Roadmap | Jobs | Models) */
+  #tabs.dtabs { display:none; }
+  #mtabs { display:flex; flex:none; border-top:1px solid var(--line); background:var(--card); padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  body.tab-agents.mob-detail #mtabs { display:none; }
+  #mtabs button { flex:1; border:0; border-radius:0; background:transparent; color:var(--muted); min-height:50px; padding:0 4px; border-top:2px solid transparent; box-shadow:none; }
+  #mtabs button.on { color:var(--ink); border-top-color:var(--accent); }
+  /* project chips: one scrollable line */
+  #projects { position:sticky; top:0; z-index:4; background:var(--bg); flex-direction:row; align-items:center; gap:8px; overflow-x:auto; overflow-y:hidden; max-height:none;
+    margin:0 calc(-10px - env(safe-area-inset-right)) 0 calc(-10px - env(safe-area-inset-left)); padding:8px calc(10px + env(safe-area-inset-right)) 8px calc(10px + env(safe-area-inset-left));
+    border-bottom:1px solid var(--line); -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  #projects::-webkit-scrollbar { display:none; }
+  .proj { flex:none; display:flex; align-items:center; gap:6px; min-height:44px; padding:0 12px; border:1px solid var(--line); border-radius:22px; background:var(--card); max-width:70vw; }
+  .proj .pn { max-width:42vw; }
+  .proj .sub { display:contents; } .proj .sub .ago { display:none; }
+  .proj .fg { display:inline-flex; align-items:center; justify-content:center; min-height:36px; min-width:36px; margin-right:-8px; padding:0 8px; font-size:12px; }
+  .proj .cnt { font-size:12.5px; }
+  /* filters button + bottom sheet */
+  #toolbar { display:flex; align-items:center; gap:10px; }
+  #sheetbg { display:block; position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.55); }
+  #sheetbg[hidden] { display:none !important; }
+  #fbox { display:none; position:fixed; left:0; right:0; bottom:0; z-index:41; flex-direction:column; gap:10px; max-height:80dvh; overflow:auto; background:var(--card);
+    border-top:1px solid var(--line); border-radius:18px 18px 0 0; padding:12px calc(14px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left)); -webkit-overflow-scrolling:touch; }
+  #fbox.open { display:flex; }
+  .sheethd { display:flex; justify-content:space-between; align-items:center; }
+  #filters, #models-box { font-size:14px; gap:2px; }
+  #filters label, #models-box label { min-height:44px; gap:10px; }
+  #filters .two { gap:0 18px; }
+  #filters input[type=number] { width:80px; padding:6px 8px; }
+  #filters input[type=text] { padding:10px; border-radius:10px; }
+  #models-box .hd a { padding:10px 6px; }
+  #models-box .hd { align-items:center; }
+  /* run list: vertical, full-width rows */
+  #runs { flex-direction:column; overflow:visible; gap:8px; padding-top:2px; }
+  .run { min-width:0; min-height:56px; padding:10px 12px; border-radius:12px; grid-template-columns:36px minmax(0,1fr); }
+  .run.hasTog { padding-right:48px; }
+  .run .rt { display:flex; flex-wrap:wrap; align-items:center; gap:3px 0; min-width:0; }
+  .run .nm { flex:0 0 100%; font-size:15px !important; }
+  .run .rt .pill.tag { display:none; }
+  .run .rt .pill { font-size:12px; padding:1px 8px; }
+  .run .rt .pill { margin-right:6px; }
+  .run .meta { flex:1 1 55%; min-width:0; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .run .act { font-size:13px; }
+  .run .tog { position:absolute; right:0; top:0; left:auto; width:46px; height:46px; display:flex; align-items:center; justify-content:center; font-size:18px; background:transparent; border:0; padding:0; border-radius:12px; min-height:0; }
+  /* tree: thin left line, 14px per level */
+  .node { gap:8px; }
+  .node.child { margin-left:0; padding-left:0; }
+  .node.child::before, .node.child:not(.last)::after, .node.hasKids > .run::after { display:none; }
+  .node > .kids { gap:8px; margin-left:8px; padding-left:6px; border-left:1px solid var(--muted); }
+  .kl.kl-open { display:block; }
+  /* detail view */
+  #mbar { display:flex; align-items:center; gap:6px; flex:none; padding:0 calc(6px + env(safe-area-inset-right)) 0 calc(4px + env(safe-area-inset-left)); border-bottom:1px solid var(--line); background:var(--bg); position:sticky; top:0; z-index:3; }
+  #mbar #back { border:0; background:transparent; color:var(--accent); font-size:16px; font-weight:600; padding:0 12px 0 8px; box-shadow:none; flex:none; }
+  #mtitle { flex:1; min-width:0; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  body:not(.tab-agents) #mbar { display:none; }
+  #runhead { padding:8px calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left)); position:relative; flex:none; gap:8px; font-size:13px; }
+  #runhead > div:nth-child(2) { flex:1; min-width:0; }
+  #runhead > div:nth-child(2) > div:first-child { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
+  #runhead .commits { display:none; }
+  #runhead .actions { display:none; }
+  #runhead.rhopen > div:nth-child(2) > div:first-child { display:block; }
+  #runhead.rhopen .commits { display:block; max-height:20vh; overflow:auto; }
+  #runhead.rhopen .actions { display:flex; }
+  #runhead .rhx { display:block; flex:none; color:var(--muted); font-size:16px; padding:0 4px; }
+  #runhead.rhopen .rhx { transform:rotate(180deg); }
+  #stream { padding:10px calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left)); -webkit-overflow-scrolling:touch; overscroll-behavior:contain; min-height:0; }
+  .bubble { max-width:100%; }
+  details.tool { font-size:13px; padding:6px 10px; } details.tool summary { min-height:24px; }
+  .ln { padding-top:1px; }
+  #spinner { padding:6px calc(12px + env(safe-area-inset-right)) 6px calc(12px + env(safe-area-inset-left)); flex:none; font-size:13px; }
+  #composer { flex:none; padding:8px calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); gap:8px; background:var(--bg); }
+  #composer textarea { min-height:44px; height:44px; max-height:30vh; resize:none; padding:10px; }
+  #composer .row { flex-wrap:nowrap; gap:6px; }
+  #composer .row button { flex:1 1 auto; padding:6px 8px; }
+  #composer .row .lg { display:none; }
+  #composer .row #hint:empty { display:none; }
+  #composer .row #hint { position:absolute; }
+  #primarybox { flex:none; padding:0 calc(12px + env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+  #primarybox summary { min-height:40px; display:flex; align-items:center; font-size:14px; }
+  #primarybox textarea { resize:none; }
+  body.tab-agents.mob-detail #composer:not([hidden]) ~ #primarybox { padding-bottom:calc(4px + env(safe-area-inset-bottom)); }
+  /* local run view: stacked, thinking collapsible */
+  #l-top { padding:8px calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left)); font-size:13px; }
+  .gauge .gb { width:100%; flex:1 1 100%; }
+  .lcols { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
+  .lpane { padding:6px calc(12px + env(safe-area-inset-right)) 6px calc(12px + env(safe-area-inset-left)); -webkit-overflow-scrolling:touch; }
   .lpane + .lpane { border-left:0; border-top:1px solid var(--line); }
-  #tabs { overflow:auto; }
-  .rmcol { width:240px; }
+  #l-thinkpane { max-height:34vh; }
+  #l-thinkpane h3 { min-height:36px; display:flex; align-items:center; font-size:13px; top:-6px; }
+  #l-thinkpane h3::before { content:"\25B8  "; white-space:pre; }
+  #l-thinkpane.open h3::before { content:"\25BE  "; }
+  #l-thinkpane:not(.open) #l-think { display:none; }
+  /* other tabs */
+  .vhead { padding:8px calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left)); gap:8px; flex-wrap:wrap; }
+  .vbody { padding:10px calc(12px + env(safe-area-inset-right)) 12px calc(12px + env(safe-area-inset-left)); -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  #psel { display:block; flex:1; min-width:0; min-height:44px; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:0 10px; }
+  .rm { flex-direction:column; align-items:stretch; overflow:visible; min-height:0; }
+  .rmcol { width:100%; }
+  .card { padding:10px 12px; }
+  table.t { display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; font-size:13px; }
+  .host { padding:10px 12px; }
+  .bar { width:90px; }
+  dialog { width:calc(100vw - 20px); max-height:calc(100dvh - 24px); overflow:auto; padding:14px; }
+  dialog input, dialog select { padding:10px; min-height:44px; }
+  dialog .two { grid-template-columns:1fr; }
 }
 body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admin { display:none !important; }
 #who { font-size:12px; color:var(--muted, #888); margin-left:auto; }
 </style>
 </head>
 <body>
-<header>
+<header id="hdr">
   <div id="logo"></div>
   <h1 id="title">Agents</h1>
+  <div id="hmenu">
   <button class="primary need-operate" id="newbtn" disabled>+ New agent</button>
   <div class="spend">
     <span id="sp-label" title="logged API usage vs the cap">total</span> <b id="sp-total">-</b> / <span id="sp-cap">-</span>
@@ -244,14 +380,20 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
     <span id="billed-out" class="mono"></span>
   </div>
   <div id="lmchips"></div>
-  <button id="attn" class="zero" title="things that need you">needs me <span class="badge" id="attn-n">0</span></button>
-  <div id="attn-pop" hidden></div>
   <span id="who" hidden></span>
+  </div>
+  <button id="attn" class="zero" title="things that need you">needs me <span class="badge" id="attn-n">0</span></button>
+  <button id="menubtn" aria-label="Menu" aria-expanded="false">&#9776;</button>
+  <div id="attn-pop" hidden></div>
 </header>
 <main>
   <div id="sidewrap">
   <aside id="side">
     <div id="projects"></div>
+    <div id="toolbar"><button id="fbtn">Filters</button><span id="f-hidden2" class="hint"></span></div>
+    <div id="sheetbg" hidden></div>
+    <div id="fbox">
+    <div class="sheethd"><b>Filters</b><button id="fdone" class="primary">Done</button></div>
     <div id="filters">
       <input type="text" id="f-name" placeholder="filter by name" autocomplete="off">
       <div class="two">
@@ -273,15 +415,17 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
       <span id="f-hidden"></span>
     </div>
     <div id="models-box"></div>
+    </div>
     <div id="runs"></div>
   </aside>
   <div id="grip" title="drag to resize"></div>
   </div>
   <section id="pane">
-    <div id="tabs">
+    <div id="tabs" class="dtabs">
       <button data-tab="agents" class="on">Agents</button><button data-tab="roadmap">Roadmap</button><button data-tab="jobs">Jobs</button><button data-tab="models">Models</button>
     </div>
     <div class="view" id="v-agents">
+      <div id="mbar"><button id="back">&#8249; Agents</button><span id="mtitle"></span></div>
       <div id="runhead"></div>
       <div id="localview">
         <div id="l-top"><div class="gauge" id="l-gauge"></div><div id="l-appr"></div></div>
@@ -296,8 +440,8 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
         <textarea id="text" placeholder="Message for the selected run (or text to forward). Click a line to select it for forwarding."></textarea>
         <div class="row">
           <button class="primary" id="send">Send to agent</button>
-          <button class="danger" id="stop">Stop after this turn</button>
-          <button id="fwd">Forward to primary</button>
+          <button class="danger" id="stop">Stop<span class="lg"> after this turn</span></button>
+          <button id="fwd">Forward<span class="lg"> to primary</span></button>
           <span class="hint" id="hint"></span>
         </div>
       </div>
@@ -308,7 +452,7 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
       </details>
     </div>
     <div class="view" id="v-roadmap" hidden>
-      <div class="vhead"><button id="rm-refresh">refresh</button><span id="rm-msg"></span></div>
+      <div class="vhead"><select id="psel" aria-label="Project"></select><button id="rm-refresh">refresh</button><span id="rm-msg"></span></div>
       <div class="vbody" id="rm-body"></div>
     </div>
     <div class="view" id="v-jobs" hidden>
@@ -321,6 +465,7 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
     </div>
   </section>
 </main>
+<nav id="mtabs"><button data-tab="agents" class="on">Agents</button><button data-tab="roadmap">Roadmap</button><button data-tab="jobs">Jobs</button><button data-tab="models">Models</button></nav>
 <dialog id="newdlg">
   <h2>New agent</h2>
   <div class="hint" id="headroom"></div>
@@ -653,7 +798,7 @@ function drawProjects() {
     const cnt = el("span", "cnt"); cnt.title = "working / waiting / crashed (with the current filters)";
     if (c.w) cnt.append(el("span", "w", c.w + "w")); if (c.a) cnt.append(el("span", "a", c.a + "!")); if (c.c) cnt.append(el("span", "c", c.c + "x"));
     d.append(cnt);
-    const sub = el("span", "sub"); sub.append(el("span", "", last ? "active " + ago(last) : ""));
+    const sub = el("span", "sub"); sub.append(el("span", "ago", last ? "active " + ago(last) : ""));
     if (forgettable) {
       const f = el("button", "fg need-admin", "forget"); f.title = "hide this project from the list";
       f.onclick = ev => { ev.stopPropagation(); confirmThen("Forget " + name + "?", "Hides this project from the dashboard until an agent registers there again. Nothing on disk is deleted.", async () => { const r = await post("/api/forget_project", {}, { p: key }); if (r.ok === false) alert(r.error); if (sel === key) selectProject(ALL); loadProjects(); }); };
@@ -671,6 +816,14 @@ function drawProjects() {
     const live = (p.active || 0) + (p.waiting || 0) > 0 || c.w + c.a > 0;
     mk(p.key, p.name, c, p.last_activity, live, !live && !(byProj.get(p.key) || []).some(r => r.active));
   }
+  const ps = $("#psel"), sig = [ALL, ...projects.map(p => p.key)].join("|") + "#" + sel;
+  if (ps.dataset.sig !== sig) {
+    ps.dataset.sig = sig; ps.textContent = "";
+    for (const [k, n] of [[ALL, "All projects"], ...projects.map(p => [p.key, p.name])]) { const o = el("option", "", n); o.value = k; ps.append(o); }
+    ps.value = sel;
+  }
+  const sc = box.querySelector(".proj.sel");
+  if (sc && isMob() && box.offsetParent && box.dataset.sel !== sel) { box.dataset.sel = sel; sc.scrollIntoView({ inline: "center", block: "nearest" }); }
 }
 function selectProject(key) {
   if (key === sel) return;
@@ -680,7 +833,7 @@ function selectProject(key) {
   loadCfg(); loadSpend(); drawAll();
   if (tab === "roadmap") loadRoadmap();
   const v = filterRuns(runs).filter(r => !r.parent)[0];
-  if (!current && v && tab === "agents") select(v.project, v.name);
+  if (!current && v && tab === "agents") select(v.project, v.name, true);
 }
 function clearCurrent() {
   current = null; if (es) es.close(); es = null; $("#stream").textContent = ""; resetLocal();
@@ -720,7 +873,7 @@ function runRow(r, kidsInfo) {
   const d = el("div", "run" + (isCur(r) ? " sel" : ""));
   d.style.setProperty("--tagc", prof.color);
   const g = el("div"); g.innerHTML = iconOf(r, 32);
-  const t = el("div");
+  const t = el("div", "rt");
   t.append(el("div", "nm", r.plan ? r.title : r.name));
   const label = r.outcome && r.outcome !== "success" ? `${r.state} · ${String(r.outcome).replace("_", " ")}` : r.state === "ended" ? "ended (no record)" : r.state;
   const p = el("span", "pill " + r.state + " " + (r.outcome || ""), label);
@@ -746,8 +899,9 @@ function runRow(r, kidsInfo) {
     n.textContent = actLine(r, acts[rk(r)] || actFrom(r)).join(" ");
     line.append(el("span", "g", r.state === "waiting" ? "·" : glyph()), n); d.append(line); actNodes.push([r, n]);
   } else if (r.state === "crashed") d.append(el("div", "act", "last: " + (r.activity?.text || "?")));
-  if (kidsInfo && collapsed(r)) {
-    const a = kidsInfo; d.append(el("div", "act", `(${a.n} agent${a.n === 1 ? "" : "s"}${a.w ? " · " + a.w + " working" : ""})`));
+  if (kidsInfo) {
+    const a = kidsInfo; d.classList.add("hasTog");
+    d.append(el("div", "act kl" + (collapsed(r) ? "" : " kl-open"), `(${a.n} agent${a.n === 1 ? "" : "s"}${a.w ? " · " + a.w + " working" : ""})`));
   }
   d.title = r.activity?.text || "";
   d.onclick = () => select(r.project, r.name);
@@ -774,14 +928,18 @@ function drawRuns() {
   if (!runs.length) box.append(el("div", "hint", allRuns.length ? "No runs in this project." : "No runs yet."));
   fitNames();
   $("#f-hidden").textContent = hidden ? `${hidden} hidden by filters` : "";
+  $("#f-hidden2").textContent = hidden ? `${hidden} hidden` : "";
   drawRunHead();
   drawSpinner();
 }
 
 // ---- run header, actions ----
+let rhOpen = false;
 function drawRunHead() {
   const r = curRun(), h = $("#runhead");
   h.textContent = "";
+  h.classList.toggle("rhopen", rhOpen);
+  $("#mtitle").textContent = r ? (r.plan ? r.title : r.name) : "";
   const lv = $("#localview"), loc = !!(r && r.local);
   lv.style.display = tab === "agents" && loc ? "flex" : "none";
   $("#stream").hidden = loc; $("#composer").hidden = loc; $("#primarybox").hidden = loc;
@@ -809,7 +967,7 @@ function drawRunHead() {
     "Moves its logs to agent_runs/archive/. The worktree and branch stay.", () => act2("/api/archive", r)), live, "admin");
   if (std) btn("Delete worktree", "danger", () => deleteWorktree(r), live || !r.worktree, "admin");
   body.append(act);
-  h.append(ic, body);
+  h.append(ic, body, el("span", "rhx", "\u25BE"));
   if (r.local) drawLocalStatic(r);
   $("#send").disabled = $("#stop").disabled = !live || !!r.plan;
 }
@@ -820,8 +978,9 @@ async function fetchGit(project, name) {   // /api/runs?p=* skips git info; the 
   const full = Array.isArray(d) && d.find(x => x.name === name);
   if (full && r) { r.commits = full.commits; r.dirty = full.dirty; if (isCur(r)) drawAll(); }
 }
-function select(project, name) {
+function select(project, name, auto) {
   if (typeof project === "object") { name = project.name; project = project.project; }
+  if (!auto && isMob()) openDetail();
   if (sel !== ALL && sel !== project) { sel = project; LS.set("project", sel); loadCfg(); loadSpend(); }
   current = { project, name }; selBubble = null; openTools = {}; toolQueue = []; stick = true; lastTop = 0;
   if (es) es.close();
@@ -1129,14 +1288,16 @@ $("#n-go").onclick = async () => {
 // ---- tabs ----
 function setTab(t) {
   tab = t;
-  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === t);
+  document.body.classList.remove("tab-agents", "tab-roadmap", "tab-jobs", "tab-models"); document.body.classList.add("tab-" + t);
+  for (const b of document.querySelectorAll("#tabs button, #mtabs button")) b.classList.toggle("on", b.dataset.tab === t);
   for (const k of ["agents", "roadmap", "jobs", "models"]) $("#v-" + k).hidden = k !== t;
   if (t === "roadmap") loadRoadmap();
   if (t === "jobs") { drawJobs(); loadJobs(); }
   if (t === "models") { drawModelsTab(); loadLms(); }
+  if (t === "agents") drawProjects();
   drawRunHead(); drawSpinner();
 }
-$("#tabs").onclick = e => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); };
+$("#tabs").onclick = $("#mtabs").onclick = e => { const b = e.target.closest("button[data-tab]"); if (b) setTab(b.dataset.tab); };
 
 // ---- roadmap tab ----
 const rmOpen = new Set();
@@ -1309,6 +1470,7 @@ function setSideW(w, save) {
 function fitNames() {
   for (const n of document.querySelectorAll("#runs .run .nm")) {
     n.style.fontSize = ""; n.title = "";
+    if (isMob()) continue;
     if (n.scrollWidth <= n.clientWidth) continue;
     const base = parseFloat(getComputedStyle(n).fontSize);
     const k = Math.max(0.7, n.clientWidth / n.scrollWidth);
@@ -1329,6 +1491,34 @@ function fitNames() {
   new ResizeObserver(fitNames).observe(side);
 }
 
+// ---- phone layout: list view <-> detail view, header menu, filter sheet ----
+const mq = window.matchMedia("(max-width:640px)");
+function isMob() { return mq.matches; }
+function setDetail(on) { document.body.classList.toggle("mob-detail", on); if (!on) drawProjects(); }
+function openDetail() {
+  if (!document.body.classList.contains("mob-detail")) { try { history.pushState({ d: 1 }, ""); } catch {} }
+  setDetail(true);
+}
+function closeDetail() { if (history.state && history.state.d) history.back(); else setDetail(false); }
+window.addEventListener("popstate", () => setDetail(!!(history.state && history.state.d)));
+try { if (history.state && history.state.d) history.replaceState(null, ""); } catch {}
+$("#back").onclick = closeDetail;
+const phText = $("#text").placeholder;
+const fitMode = () => { $("#text").placeholder = mq.matches ? "Message this agent…" : phText; };
+fitMode();
+mq.addEventListener("change", () => { setDetail(false); fitNames(); fitMode(); });
+const menuOpen = on => { $("#hdr").classList.toggle("menu-open", on); $("#menubtn").setAttribute("aria-expanded", on); if (on) $("#attn-pop").hidden = true; };
+$("#menubtn").onclick = ev => { ev.stopPropagation(); menuOpen(!$("#hdr").classList.contains("menu-open")); };
+$("#newbtn").addEventListener("click", () => menuOpen(false));
+document.addEventListener("click", ev => { if (!ev.target.closest("#hmenu, #menubtn")) menuOpen(false); });
+$("#attn").addEventListener("click", () => menuOpen(false));
+const sheet = on => { $("#fbox").classList.toggle("open", on); $("#sheetbg").hidden = !on; };
+$("#fbtn").onclick = () => sheet(true); $("#fdone").onclick = $("#sheetbg").onclick = () => sheet(false);
+$("#psel").onchange = e => selectProject(e.target.value);
+$("#runhead").addEventListener("click", ev => { if (isMob() && !ev.target.closest("button")) { rhOpen = !rhOpen; $("#runhead").classList.toggle("rhopen", rhOpen); } });
+$("#l-thinkpane h3").addEventListener("click", () => { if (isMob()) $("#l-thinkpane").classList.toggle("open"); });
+setTab("agents");
+
 // ---- start ----
 (async () => {
   // who am I: the Cloudflare Access listener limits what the user may do; the server enforces it, this only hides buttons
@@ -1342,7 +1532,7 @@ function fitNames() {
   setNewBtn(); loadCfg(); loadSpend(); loadAttention(); loadLms();
   await loadRuns();
   const v = filterRuns(runs).filter(r => !r.parent)[0];
-  if (v && !current) select(v.project, v.name);
+  if (v && !current) select(v.project, v.name, true);
 })();
 setInterval(loadRuns, 4000); setInterval(loadSpend, 8000); setInterval(loadProjects, 8000);
 setInterval(loadAttention, 8000); setInterval(loadLms, 20000); setInterval(loadCfg, 60000);
