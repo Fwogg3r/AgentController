@@ -1,7 +1,7 @@
 # Internet access + website-managed permissions: security review (Opus subagent, on the plan), 2026-11-10
 
-Proposal: website (fwogg3r.com, Firebase) admin page writes per-service grants to Firestore, with the owner email hard-coded
-as super-admin; a sync on SHEILA writes Cloudflare Access policies from it; agentdash published at agentdash.fwogg3r.com
+Proposal: website (the owner's website, Firebase) admin page writes per-service grants to Firestore, with the owner email hard-coded
+as super-admin; a sync on the home server writes Cloudflare Access policies from it; agentdash published at the dashboard hostname
 behind Access, verifying the Access JWT itself and enforcing view / operate / admin.
 
 ## Verdicts
@@ -12,10 +12,10 @@ behind Access, verifying the Access JWT itself and enforcing view / operate / ad
    service-key allow-list, level enums, `updatedAt == request.time`, `updatedBy == request.auth.uid`). Any XSS on the site
    becomes an infrastructure compromise: strict CSP on the admin page, notifications on every applied change, and
    high-risk grants (ssh, ha, agentdash operate/admin) gated to the owner.
-2. **Sync: agree, with changes.** Keep the fixed "tbryant only" policy on every app and add `svc-<id>` beside it, so the
+2. **Sync: agree, with changes.** Keep the fixed owner-only policy on every app and add `svc-<id>` beside it, so the
    owner never depends on the sync; only touch `svc-*` policies; refuse Bypass/Everyone/empty includes. Keep last state
    when Firestore is unreachable; skip malformed docs; atomic grants.json. Secrets in local DPAPI files, not on Z:
-   (the NAS is published by files.fwogg3r.com). Firestore service account `roles/datastore.viewer` only (org policy may
+   (the NAS is published by the NAS web hostname). Firestore service account `roles/datastore.viewer` only (org policy may
    block key creation). Cloudflare token: Access Apps and Policies Edit + Organizations Revoke. 2-min polling is fine.
 3. **Revocation:** removing a policy entry doesn't end sessions: call `revoke_user` on every removal, keep the agentdash
    app session short, and have agentdash re-read grants on every request.
