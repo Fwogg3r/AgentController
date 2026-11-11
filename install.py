@@ -5,6 +5,7 @@
 
     uv run install.py                      # tool + /api-request + /batchy (asks for the API key once)
     uv run install.py --init PATH          # also set up a project: agentcontroller.toml + secrets dir + key
+    uv run install.py --no-dash-task       # skip the always-on dashboard logon task (Windows)
     uv run install.py --dry-run            # show what would change
     uv run install.py --uninstall
 
@@ -15,7 +16,9 @@ Steps:
   3. /batchy: clones s2-streamstore/claude-batch-toolkit at a pinned commit, copies its skill and MCP
      server into ~/.claude, registers the `claude-batch` MCP server in ~/.claude.json. The key goes only
      into that server's own `env` (its process), never into a global ANTHROPIC_API_KEY.
-  4. Optional --statusline: the toolkit's batch status line (it sources ~/.claude/env, which then holds
+  4. Windows: a Task Scheduler logon task "AgentController dashboard" running `agentdash --all` hidden
+     (--dash-task / --no-dash-task), and ~/.agentcontroller/config.toml with commented defaults.
+  5. Optional --statusline: the toolkit's batch status line (it sources ~/.claude/env, which then holds
      the key as well, readable only by scripts that source it).
 
 Every file it overwrites in ~/.claude is backed up to <file>.bak first.
@@ -31,6 +34,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO))  # for agentcontroller.registry (TASK_NAME)
 BATCH_REPO = "https://github.com/s2-streamstore/claude-batch-toolkit"
 # Pinned so an upstream change can't silently alter what lands in ~/.claude; bump after testing.
 BATCH_COMMIT = "feb9ff9c5e060ea3abb6829411254222e7d60577"
@@ -185,6 +189,100 @@ def install_statusline(claude: Path, script: str, key: str) -> None:
     write(settings_path, json.dumps(settings, indent=2) + "\n")
 
 
+GLOBAL_CONFIG = """# AgentController global config (read by agentdash --all). Everything is optional.
+# include = "Z:/shared/agentcontroller/dash.toml"   # merged first; the keys below win
+[dash]
+# port = 8765
+# scan = ["~/Documents/GitHub"]     # also list repos here that have an agentcontroller.toml
+# hide = ["C:/some/repo"]           # never list these projects
+# [pmjc]
+# url = "http://127.0.0.1:8770"
+# token_file = "Z:/secrets/pmjc/agentdash.token"
+# [lmstudio.hosts]
+# local = "http://127.0.0.1:1234"
+"""
+
+
+def init_global_config() -> None:
+    cfg = Path(os.environ.get("AGENTCONTROLLER_HOME") or Path.home() / ".agentcontroller") / "config.toml"
+    if cfg.exists():
+        say("skip", f"{cfg} exists")
+    else:
+        write(cfg, GLOBAL_CONFIG)
+
+
+def _tool_python() -> Path:
+    """pythonw.exe of the uv tool's environment (so agentdash runs without a console window)."""
+    try:
+        d = subprocess.run(["uv", "tool", "dir"], capture_output=True, text=True, check=True).stdout.strip()
+        exe = Path(d) / "agentcontroller" / "Scripts" / "pythonw.exe"
+        if exe.exists():
+            return exe
+    except (OSError, subprocess.SubprocessError):
+        pass
+    exe = Path(sys.executable)
+    return exe.with_name("pythonw.exe") if exe.with_name("pythonw.exe").exists() else exe
+
+
+def dash_task_xml() -> str:
+    from xml.sax.saxutils import escape
+    user = os.environ.get("USERDOMAIN", "") + "\\" + os.environ.get("USERNAME", "")
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>AgentController unified dashboard (agentdash --all)</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{escape(user)}</UserId><Delay>PT20S</Delay></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{escape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+  </Settings>
+  <Actions Context="Author"><Exec>
+    <Command>{escape(str(_tool_python()))}</Command><Arguments>-m agentcontroller.dash --all</Arguments><WorkingDirectory>{escape(str(REPO))}</WorkingDirectory>
+  </Exec></Actions>
+</Task>"""
+
+
+def install_dash_task() -> None:
+    if os.name != "nt":
+        say("skip", "the dashboard logon task is Windows-only (ensure_dash() starts agentdash on demand elsewhere)")
+        return
+    from agentcontroller.registry import TASK_NAME
+    xml = Path(tempfile.gettempdir()) / "agentcontroller-dash-task.xml"
+    say("write", f"{xml} -> schtasks /Create /TN \"{TASK_NAME}\"")
+    if DRY:
+        return
+    xml.write_text(dash_task_xml(), encoding="utf-16")
+    r = subprocess.run(["schtasks", "/Create", "/TN", TASK_NAME, "/XML", str(xml), "/F"], capture_output=True, text=True)
+    xml.unlink(missing_ok=True)
+    if r.returncode != 0:
+        say("warn", f"couldn't create the dashboard task: {(r.stderr or r.stdout).strip()}")
+    else:
+        say("task", f"'{TASK_NAME}' runs agentdash --all at logon (start it now: schtasks /Run /TN \"{TASK_NAME}\")")
+
+
+def remove_dash_task() -> None:
+    if os.name != "nt":
+        return
+    from agentcontroller.registry import TASK_NAME
+    say("run", f"schtasks /Delete /TN \"{TASK_NAME}\" /F")
+    if not DRY:
+        subprocess.run(["schtasks", "/End", "/TN", TASK_NAME], capture_output=True)
+        subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True)
+
+
 def init_project(args, project: Path) -> None:
     """Minimal per-project setup from examples/agentcontroller.toml (its default secrets dir is .agentcontroller)."""
     toml = project / "agentcontroller.toml"
@@ -229,6 +327,8 @@ def main() -> None:
     ap.add_argument("--statusline", action="store_true", help="also install the batch toolkit's status line")
     ap.add_argument("--claude-dir", default="~/.claude", help="Claude Code config dir (default ~/.claude)")
     ap.add_argument("--claude-json", default="~/.claude.json", help="Claude Code user config (default ~/.claude.json)")
+    ap.add_argument("--dash-task", action="store_true", help="install only the dashboard logon task and exit (Windows)")
+    ap.add_argument("--no-dash-task", action="store_true", help="skip the dashboard logon task; remove it with --uninstall")
     ap.add_argument("--uninstall", action="store_true", help="remove the skills, the MCP server and the tool")
     ap.add_argument("--dry-run", action="store_true", help="print the changes without making them")
     ap.add_argument("-y", "--yes", action="store_true", help="never prompt (no key -> skip the MCP server)")
@@ -237,13 +337,20 @@ def main() -> None:
     claude, claude_json = Path(args.claude_dir).expanduser(), Path(args.claude_json).expanduser()
 
     need("uv", "Install it: https://docs.astral.sh/uv/getting-started/installation/")
+    if args.dash_task:
+        install_dash_task()
+        return
     if args.uninstall:
+        remove_dash_task()
         uninstall(args, claude, claude_json)
         return
     need("git", "Install git first.")
 
     install_tool(args)
     install_api_skill(claude)
+    init_global_config()
+    if not args.no_dash_task:
+        install_dash_task()
     if not args.no_batchy:
         install_batchy(args, claude, claude_json)
     if args.init:

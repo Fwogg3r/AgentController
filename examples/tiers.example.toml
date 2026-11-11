@@ -1,0 +1,61 @@
+# agentlocal tiers: copy this file somewhere private and point AGENTCONTROLLER_TIERS (or [local].tiers_path in
+# agentcontroller.toml) at it. Use forward slashes or 'literal strings' for Windows paths.
+#
+# [models.<name>]  facts about a model and its server (measure with `agentlocal probe --model <name>`)
+# [tiers.<name>]   policy: how much freedom a model gets. Lower tiers: smaller stages, more human gates.
+
+[models.local-27b]
+id = "your-model-id-in-lm-studio"
+tier = "small"
+endpoint = "http://localhost:1234/v1"
+context_tokens = 65536
+max_output = 16384
+chars_per_token = 3.2
+no_think = { method = "suffix", value = "/no_think" }
+reasoning = { field = "reasoning_content", tag = "think" }
+sampling = { temperature = 0.6, top_p = 0.95 }
+timeout = 1800                # seconds per model call (and aider --timeout)
+aider_settings = { examples_as_sys_msg = true }   # extra keys for aider's model settings
+
+[tiers.small]
+runner = "staged"            # staged | aider-single | passthrough
+decompose = "always"
+max_stages = 8
+max_edit_files = 2
+allow_new_files = true
+thinking = { plan = 8000, spec = 6000, fix = 4000, edit = 0 }
+edit_format = "diff"
+max_fix_attempts = 2
+max_replans = 1              # 0 or 1: after a stage fails every fix, one replan of the rest
+autonomy = "edit"            # locked | edit | shell | full; above "edit" only with AGENTLOCAL_SANDBOX=1
+                             # locked also gates every test run
+gates = ["plan", "stage", "tests", "protected"]
+# instructions = "path/to/your-instructions.md"   # given to every call
+
+[tiers.medium]
+runner = "staged"
+max_stages = 6
+max_edit_files = 4
+thinking = { plan = 12000, spec = 10000, fix = 6000, edit = 0 }
+gates = ["plan", "protected"]
+
+[tiers.top]
+runner = "passthrough"       # one aider call with the whole idea; no plan, no gates
+decompose = "never"
+gates = []
+
+# One aider call with a brief (exact-code briefs work well with small models), like the old run.sh profiles:
+#   agentlocal run @brief.md --model <name> --tier aider-edit --files path/a.py path/b.py
+[tiers.aider-edit]           # run.sh PROFILE=edit: edits, aider runs the repo's test_cmd itself (no shell commands)
+runner = "passthrough"
+decompose = "never"
+autonomy = "edit"
+map_tokens = 4096
+gates = []
+
+[tiers.aider-locked]         # run.sh PROFILE=locked: edits only the named files, no tests, no shell
+runner = "passthrough"
+decompose = "never"
+autonomy = "locked"
+map_tokens = 4096
+gates = []

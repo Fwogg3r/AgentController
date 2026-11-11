@@ -74,8 +74,10 @@ Follow-up on the same agent: `agentctl --brief followup.md --name <name> --resum
 
 ## Dashboard, spend, autopilot
 
-- `agentdash` serves http://127.0.0.1:8765/: live runs, costs, steering messages, a New agent form, and
-  the user's Claude Code sessions. Start it in the background if the user wants to watch.
+- `agentdash` is one always-on dashboard at http://127.0.0.1:8765/ for every project (a logon task starts it and the CLIs
+  start it if it is down): live runs, costs, steering messages, a New agent form, the user's Claude Code sessions, local-model
+  agents, the roadmap and pmjc jobs. Pass `--parent NAME` (or set `AGENTCONTROLLER_PARENT`) so a spawned agent nests under
+  its coordinator, and `--roadmap ID` to link a run to a roadmap item.
 - `agentask --spend`: logged estimate against the cap. `agentusage [--days N] [--by-key]`: actual spend
   from the Admin API (needs the admin key; hours of lag).
 - `agentpilot --sessions N --hours H`: back-to-back plan-billed `claude -p` sessions driven by

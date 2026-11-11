@@ -1,12 +1,19 @@
-"""agentdash: localhost dashboard for the agents started by agentctl (127.0.0.1 only).
+"""agentdash: localhost dashboard for every agent in every project (127.0.0.1 only).
 
-    agentdash [--project PATH] [--port 8765] [--session-start 2026-01-31T09:00:00]
+    agentdash [--all | --project PATH] [--port 8765] [--session-start 2026-01-31T09:00:00]
+
+--all serves every project (registry + Claude Code sessions, see hub.py) and is the default when no
+agentcontroller.toml is found from the cwd; --project pins one project (same code path, `p` optional).
+The project's config is per request (ContextVar behind `CFG`). Projects without a toml are read-only.
 
 Reads <runs>/<name>.events.jsonl (falls back to <name>.log for older runs) and the usage log.
 Writes only inbox/pid/archive files, briefs, and launches/stops agents. Never reads or serves key files.
 """
 
 import argparse
+import codecs
+import contextlib
+import contextvars
 import hmac
 import json
 import os
@@ -22,8 +29,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import claude_sessions
-from .config import Config, load
+from . import claude_sessions, hub, registry
+from .config import CONFIG_NAME, Config, load
 
 PAGE = Path(__file__).resolve().parent / "static" / "index.html"
 PKG_PARENT = str(Path(__file__).resolve().parent.parent)
@@ -36,7 +43,22 @@ STALL_SECONDS = 180
 OUTCOMES = {"success": "success", "error_max_turns": "max_turns", "error_max_budget_usd": "budget",
             "max_tokens": "max_tokens", "refusal": "refusal"}
 
-CFG: Config
+_CUR: contextvars.ContextVar = contextvars.ContextVar("agentdash_cfg", default=None)
+
+
+class _CfgProxy:
+    """`CFG.x` reads the config of the project the current request (thread/context) selected."""
+
+    def __getattr__(self, name):
+        c = _CUR.get()
+        if c is None:
+            raise RuntimeError("no project selected for this request")
+        return getattr(c, name)
+
+
+CFG: Config = _CfgProxy()  # type: ignore[assignment]
+ALL_MODE = True
+PINNED: str | None = None  # project key when started with --project
 SESSION_START = ""  # ISO timestamp, set in main()
 # --remote: requests from any host are accepted with this token (query ?token= once, then a cookie).
 TOKEN: str | None = None
@@ -90,12 +112,19 @@ def read_pid(name: str) -> int | None:
         return None
 
 
+_pid_cache: dict[int, tuple[float, bool]] = {}
+
+
 def pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
-    if os.name == "nt":
+    if os.name == "nt":  # tasklist is slow: remember the answer for 3 s (many projects x many runs)
+        hit = _pid_cache.get(pid)
+        if hit and time.time() - hit[0] < 3:
+            return hit[1]
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
-        return str(pid) in out.split()
+        _pid_cache[pid] = (time.time(), str(pid) in out.split())
+        return _pid_cache[pid][1]
     try:
         os.kill(pid, 0)
         return True
@@ -331,10 +360,10 @@ def active_runs(usage: list[dict]) -> list[dict]:
     return [r for r in (run_info(n, usage, git_info=False) for n in run_names()) if r["active"]]
 
 
-def spend() -> dict:
+def spend(runs: list[dict] | None = None) -> dict:
     usage = usage_records()
     total = sum(r.get("usd", 0.0) for r in usage)
-    runs = [run_info(n, usage, git_info=False) for n in run_names()]
+    runs = runs if runs is not None else [run_info(n, usage, git_info=False) for n in run_names()]
     # Runs that haven't ended have not been logged yet, so add their live cost.
     live = sum(r["cost"] for r in runs if r["state"] != "finished" and not r["legacy"])
     session = sum(r.get("usd", 0.0) for r in usage if r.get("ts", "") >= SESSION_START) + live
@@ -360,7 +389,14 @@ def briefs() -> list[str]:
 
 
 # ---------- actions (each returns (http_code, json)) ----------
+def has_toml() -> bool:
+    return (CFG.root / CONFIG_NAME).is_file()
+
+
 def launch(body: dict) -> tuple[int, dict]:
+    if not has_toml():
+        return 400, {"ok": False, "error": f"{CFG.root.name} has no {CONFIG_NAME}: it is read-only here "
+                     "(set it up with `uv run install.py --init PATH`)"}
     name = str(body.get("name", ""))
     if not SLUG_RE.match(name) or name in PROTECTED:
         return 400, {"ok": False, "error": "name must be a slug: a-z, 0-9, '-' (max 40), and not main/master"}
@@ -401,6 +437,9 @@ def launch(body: dict) -> tuple[int, dict]:
            "--max-turns", str(turns), "--no-textlog"]
     if resume:
         cmd += ["--resume", str(resume)]
+    for opt in ("parent", "roadmap"):
+        if body.get(opt) and re.fullmatch(r"[\w./-]{1,120}", str(body[opt])):
+            cmd += [f"--{opt}", str(body[opt])]
     CFG.runs.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "PYTHONPATH": PKG_PARENT + os.pathsep + os.environ.get("PYTHONPATH", ""),
            "PYTHONIOENCODING": "utf-8"}
@@ -485,6 +524,233 @@ def worktree_delete(name: str, discard: bool) -> tuple[int, dict]:
     return 200, {"ok": rc == 0, "branch_error": None if rc == 0 else out2}
 
 
+# ---------- projects, configs and rows (one dash serves many projects) ----------
+PINNED_ENTRY: dict | None = None
+_pm_cache: tuple[float, dict] = (0.0, {})
+_cfgs: dict[str, tuple[float, Config]] = {}
+_api_cache: dict = {}
+_extra_cache: dict = {}
+_ROWS_TTL = 4.0
+
+
+@contextlib.contextmanager
+def using(cfg: Config):
+    t = _CUR.set(cfg)
+    try:
+        yield
+    finally:
+        _CUR.reset(t)
+
+
+def projects_map() -> dict[str, dict]:
+    """{key: entry} for every listed project (cached 5 s); only the pinned one with --project."""
+    global _pm_cache
+    if time.time() - _pm_cache[0] < 5 and _pm_cache[1]:
+        return _pm_cache[1]
+    if PINNED_ENTRY:
+        m = {PINNED_ENTRY["key"]: {**PINNED_ENTRY, "roadmap": (Path(PINNED_ENTRY["path"]) / "docs/roadmap/roadmap.md").is_file()}}
+    else:
+        m = hub.projects()
+    _pm_cache = (time.time(), m)
+    return m
+
+
+def cfg_for(key: str) -> Config | None:
+    """The project's Config (reloaded when its toml changes); None for unknown keys or vanished directories."""
+    e = projects_map().get(key)
+    if not e or not Path(e["path"]).is_dir():
+        return None
+    toml = Path(e["path"]) / CONFIG_NAME
+    try:
+        mt = toml.stat().st_mtime if toml.is_file() else 0.0
+    except OSError:
+        mt = 0.0
+    hit = _cfgs.get(key)
+    if hit and hit[0] == mt:
+        return hit[1]
+    cfg = load(Path(e["path"]))
+    _cfgs[key] = (mt, cfg)
+    return cfg
+
+
+def _fin(rows: list[dict], key: str, name: str) -> list[dict]:
+    for r in rows:
+        r["project"], r["project_name"] = key, name
+        r.setdefault("parent", None)
+        if not r.get("provider"):
+            r["provider"] = "plan" if r.get("kind") in ("plan", "plan-agent") else "anthropic"
+    return rows
+
+
+def api_part(key: str, git: bool) -> tuple[list[dict], dict | None]:
+    """(API runs of the project's own runs dir, spend dict or None without a toml); cached 4 s."""
+    hit = _api_cache.get((key, git))
+    if hit and time.time() - hit[0] < _ROWS_TTL:
+        return hit[1], hit[2]
+    cfg = cfg_for(key)
+    rows: list[dict] = []
+    sp = None
+    if cfg is not None:
+        with using(cfg):
+            usage = usage_records()
+            rows = [run_info(n, usage, git_info=git) for n in run_names()]
+            if has_toml():
+                sp = spend(rows)
+        recs = {(r.get("name") or r.get("id")): r for r in registry.agents(key) if r.get("kind") in ("api", "oneshot", "pilot")}
+        for r in rows:
+            rec = recs.get(r["name"]) or {}
+            r["parent"], r["roadmap"] = rec.get("parent"), rec.get("roadmap")
+            if rec.get("provider") and rec["provider"] != "anthropic":
+                r["provider"] = rec["provider"]
+        _fin(rows, key, projects_map().get(key, {}).get("name", key))
+    _api_cache[(key, git)] = (time.time(), rows, sp)
+    return rows, sp
+
+
+def plan_dirs(key: str, cfg: Config | None) -> list[Path]:
+    dirs = list(hub.claude_dirs().get(key, []))
+    if cfg is not None:
+        extra = claude_sessions.project_dir(cfg.root, cfg.claude_projects_dir, hub.CLAUDE_BASE)
+        if extra and all(extra.resolve() != d.resolve() for d in dirs):
+            dirs.append(extra)
+    return dirs
+
+
+def extra_part(key: str, plan: bool, age: float) -> list[dict]:
+    """Claude Code sessions (all the project's ~/.claude/projects dirs) + registry and local runs; cached 4 s."""
+    ck = (key, plan, age)
+    hit = _extra_cache.get(ck)
+    if hit and time.time() - hit[0] < _ROWS_TTL:
+        return hit[1]
+    rows: list[dict] = []
+    if plan:
+        for d in plan_dirs(key, cfg_for(key)):
+            rows += claude_sessions.list_runs(d, age)
+    rows += hub.registered_runs(key)
+    _fin(rows, key, projects_map().get(key, {}).get("name", key))
+    _extra_cache[ck] = (time.time(), rows)
+    return rows
+
+
+def _sort(rows: list[dict]) -> list[dict]:
+    rows.sort(key=lambda r: r.get("last_activity") or "", reverse=True)
+    rows.sort(key=lambda r: not r.get("active"))
+    return rows
+
+
+def project_rows(key: str, plan: bool = True, age: float = claude_sessions.DEFAULT_AGE, git: bool = False) -> list[dict]:
+    return _sort([*api_part(key, git)[0], *extra_part(key, plan, age)])
+
+
+def all_rows(plan: bool, age: float) -> list[dict]:
+    rows: list[dict] = []
+    for key in list(projects_map()):
+        rows += project_rows(key, plan, age)
+    return _sort(rows)
+
+
+def project_entry(key: str, e: dict) -> dict:
+    rows = [r for r in project_rows(key) if r.get("kind") != "plan-agent"]
+    sp = api_part(key, False)[1]
+    live = lambda st: sum(1 for r in rows if r.get("state") == st)
+    return {"key": key, "name": e.get("name") or key, "path": e["path"], "toml": bool(e.get("toml")),
+            "roadmap": bool(e.get("roadmap")), "exists": bool(e.get("exists")), "sources": e.get("sources", []),
+            "active": live("working"), "waiting": live("waiting"), "crashed": live("crashed"), "total": len(rows),
+            "last_activity": max((r.get("last_activity") or "" for r in rows), default="") or None,
+            "models": sorted({r["model"] for r in rows if r.get("model")}),
+            "spend": {"total": sp["total"], "cap": sp["cap"]} if sp else None}
+
+
+def projects_list() -> list[dict]:
+    out = [project_entry(k, e) for k, e in projects_map().items()]
+    out.sort(key=lambda p: p["last_activity"] or "", reverse=True)
+    out.sort(key=lambda p: not (p["active"] or p["waiting"]))
+    return out
+
+
+def spend_all() -> dict:
+    tot = logged = sess = 0.0
+    per: dict = {}
+    for key, e in projects_map().items():
+        sp = api_part(key, False)[1]
+        if sp:
+            tot, logged, sess = tot + sp["total"], logged + sp["logged"], sess + sp["session"]
+            per.update({f"{e.get('name') or key}:{n}": c for n, c in sp["per_run"].items()})
+    return {"total": round(tot, 4), "logged": round(logged, 4), "cap": None, "session": round(sess, 4),
+            "session_start": SESSION_START, "per_run": per}
+
+
+def attention() -> list[dict]:
+    """What needs the owner: local approvals, pmjc approvals, runs that crashed in the last 24 h, waiting Claude sessions."""
+    out = []
+    for key in list(projects_map()):
+        for r in project_rows(key):
+            base = {"project": key, "project_name": r.get("project_name"), "run": r["name"], "ts": r.get("last_activity")}
+            for a in r.get("approvals") or []:
+                out.append({**base, "kind": "approval", "text": f"approve? {a.get('summary') or a.get('id') or ''}"[:200],
+                            "action": {"type": "local_approve", "run": r["name"], "id": a.get("id")}})
+            if r.get("state") == "crashed" and (r.get("idle_seconds") or 0) < 86400:
+                out.append({**base, "kind": "crashed", "text": f"{r.get('title') or r['name']} crashed"[:200]})
+            elif r.get("plan") and r.get("state") == "waiting":
+                out.append({**base, "kind": "waiting", "text": f"{r.get('title') or r['name']} is waiting"[:200]})
+    pm = hub.pmjc()
+    for a in pm.get("approvals") or []:
+        if isinstance(a, dict) and a.get("status") in (None, "pending"):
+            out.append({"project": None, "run": None, "kind": "pmjc_approval", "ts": a.get("created") or a.get("ts"),
+                        "text": str(a.get("summary") or a.get("title") or a.get("action") or a.get("id"))[:200],
+                        "action": {"type": "link", "url": f"{pm.get('url', '')}/approve/{a.get('id')}"}})
+    out.sort(key=lambda x: str(x.get("ts") or ""), reverse=True)
+    return out
+
+
+_rm_cache: dict[str, tuple[float, dict]] = {}
+
+
+def roadmap_for(key: str, fresh: bool = False) -> dict:
+    e = projects_map()[key]
+    hit = _rm_cache.get(key)
+    if hit and not fresh and time.time() - hit[0] < 8:
+        data = hit[1]
+    else:
+        data = hub.roadmap(e["path"])
+        _rm_cache[key] = (time.time(), data)
+    by: dict[str, list[str]] = {}
+    for rec in registry.agents(key):
+        if rec.get("roadmap"):
+            by.setdefault(str(rec["roadmap"]), []).append(rec.get("name") or rec["id"])
+    data = json.loads(json.dumps(data))  # copy: the cache stays free of per-call fields
+
+    def walk(items):
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            ids = {str(it.get(k)) for k in ("id", "nickname", "path") if it.get(k)}
+            it["agents"] = sorted({n for i in ids for n in by.get(i, [])})
+            for k in ("items", "children"):
+                if isinstance(it.get(k), list):
+                    walk(it[k])
+
+    for ph in data.get("phases", []) or []:
+        walk(ph.get("items", []) or [])
+        walk(ph.get("groups", []) or [])
+    return data
+
+
+def _clear_caches() -> None:
+    global _pm_cache
+    _pm_cache = (0.0, {})
+    _api_cache.clear()
+    _extra_cache.clear()
+
+
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("agentcontroller")
+    except Exception:  # noqa: BLE001
+        return "dev"
+
+
 # ---------- http ----------
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -540,6 +806,27 @@ class Handler(BaseHTTPRequestHandler):
         name = (q.get("run") or [""])[0]
         return name if NAME_RE.match(name) else None
 
+    def _project(self, q: dict, key: str | None = None) -> tuple[str, Config] | None:
+        """Select the request's project (query `p`, else the pinned one) and bind its config; replies on error."""
+        key = key if key is not None else ((q.get("p") or [""])[0] or PINNED or "")
+        if not key or key == "*":
+            self._json({"ok": False, "error": "this endpoint needs a project: ?p=<key from /api/projects>"}, 400)
+            return None
+        cfg = cfg_for(key)
+        if cfg is None:
+            self._json({"ok": False, "error": "unknown project (or its directory is gone)"}, 404)
+            return None
+        _CUR.set(cfg)  # one context per handler thread; every request sets it again
+        return key, cfg
+
+    @staticmethod
+    def _plan_args(q: dict) -> tuple[bool, float]:
+        try:
+            age = float((q.get("plan_age") or [claude_sessions.DEFAULT_AGE])[0]) or claude_sessions.DEFAULT_AGE
+        except ValueError:
+            age = claude_sessions.DEFAULT_AGE
+        return (q.get("plan") or ["1"])[0] != "0", age
+
     def do_GET(self):
         if not self._local_ok():
             return self._json({"ok": False, "error": "forbidden"}, 403)
@@ -553,27 +840,49 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, PAGE.read_bytes(), "text/html", cookie)
             except OSError:
                 return self._json({"ok": False, "error": "static/index.html missing"}, 500)
+        if u.path == "/api/health":
+            return self._json({"mode": "all" if ALL_MODE else "project", "version": _version(), "pid": os.getpid(),
+                               "projects": len(_pm_cache[1])})
+        if u.path == "/api/projects":
+            return self._json(projects_list())
+        if u.path == "/api/jobs":
+            return self._json(hub.pmjc())
+        if u.path == "/api/lmstudio":
+            return self._json(hub.lmstudio())
+        if u.path == "/api/attention":
+            return self._json(attention())
         if u.path == "/api/runs":
-            usage = usage_records()
-            runs = [run_info(n, usage) for n in run_names()]
-            runs.sort(key=lambda r: (not r["active"], -last_activity(r["name"])))
-            if (q.get("plan") or ["1"])[0] != "0":  # Claude Code sessions: never in spend/budget, only listed
-                try:
-                    age = float((q.get("plan_age") or [claude_sessions.DEFAULT_AGE])[0]) or claude_sessions.DEFAULT_AGE
-                except ValueError:
-                    age = claude_sessions.DEFAULT_AGE
-                runs += claude_sessions.list_runs(plan_dir(), age)
-            return self._json(runs)
+            plan, age = self._plan_args(q)
+            p = (q.get("p") or [""])[0] or PINNED or "*"
+            if p == "*":
+                return self._json(all_rows(plan, age))
+            if not self._project(q, p):
+                return
+            return self._json(_sort([*api_part(p, True)[0], *extra_part(p, plan, age)]))
         if u.path == "/api/spend":
+            p = (q.get("p") or [""])[0] or PINNED or "*"
+            if p == "*":
+                return self._json(spend_all())
+            if not self._project(q, p):
+                return
             return self._json(spend())
+        sel = self._project(q)
+        if not sel:
+            return
+        key, cfg = sel
         if u.path == "/api/config":
-            return self._json({"project": CFG.root.name, "models": CFG.models, "default_model": CFG.default_model,
-                               "default_base": CFG.default_base, "max_turns": CFG.default_max_turns,
-                               "branches": branches(), "briefs": briefs(), **headroom(usage_records())})
+            return self._json({"project": CFG.root.name, "key": key, "models": CFG.models,
+                               "default_model": CFG.default_model, "default_base": CFG.default_base,
+                               "max_turns": CFG.default_max_turns, "branches": branches(), "briefs": briefs(),
+                               "can_launch": has_toml() and CFG.key_file.is_file(), **headroom(usage_records())})
+        if u.path == "/api/roadmap":
+            return self._json(roadmap_for(key, (q.get("refresh") or ["0"])[0] == "1"))
         if u.path == "/api/worktree":
             name = self._run_arg(q)
             return self._json(*reversed(worktree_state(name))) if name else self._json({"ok": False}, 400)
         if u.path == "/api/billed":
+            if not has_toml():
+                return self._json({"ok": False, "output": f"{CFG.root.name} has no {CONFIG_NAME}"})
             try:
                 p = subprocess.run([sys.executable, "-m", "agentcontroller.usage", "--project", str(CFG.root), "--json"],
                                    capture_output=True, text=True, timeout=90, cwd=CFG.root,
@@ -583,22 +892,41 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "output": str(e)})
         if u.path == "/api/stream":
             name = self._run_arg(q)
-            return self._stream(name) if name else self._json({"ok": False, "error": "bad run"}, 400)
+            return self._stream(key, name) if name else self._json({"ok": False, "error": "bad run"}, 400)
         self._json({"ok": False, "error": "not found"}, 404)
 
     def do_POST(self):
-        if not self._local_ok() or not self.headers.get("Content-Type", "").startswith("application/json"):
-            return self._json({"ok": False, "error": "forbidden"}, 403)
+        if not self._local_ok() or not self.headers.get("Content-Type", "").startswith("application/json") \
+                or self.headers.get("X-AC") != "1":
+            return self._json({"ok": False, "error": "forbidden (POSTs need Content-Type: application/json and X-AC: 1)"}, 403)
         u = urlparse(self.path)
         q = parse_qs(u.query)
         body = self._body()
+        if u.path == "/api/forget_project":
+            key = body.get("p")
+            if not isinstance(key, str) or key not in projects_map():
+                return self._json({"ok": False, "error": "unknown project"}, 404)
+            hub.hide_project(key)
+            _clear_caches()
+            return self._json({"ok": True})
+        sel = self._project(q)
+        if not sel:
+            return
+        key, cfg = sel
         name = self._run_arg(q) or (body.get("run") if isinstance(body.get("run"), str) and NAME_RE.match(body["run"]) else None)
 
         def reply(res):
+            _api_cache.clear()
+            _extra_cache.clear()
             self._json(res[1], res[0])
 
         if u.path == "/api/launch":
             return reply(launch(body))
+        if u.path == "/api/local_approve":
+            aid = body.get("id")
+            if not name or not isinstance(aid, str):
+                return self._json({"ok": False, "error": "need run and id"}, 400)
+            return reply(hub.decide_local(key, name, aid, bool(body.get("approve"))))
         if u.path == "/api/primary":
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():
@@ -624,41 +952,82 @@ class Handler(BaseHTTPRequestHandler):
             return reply(worktree_delete(name, bool(body.get("discard"))))
         self._json({"ok": False, "error": "not found"}, 404)
 
-    def _stream(self, name: str) -> None:
-        plan = claude_sessions.find_file(plan_dir(), name)
+    def _sources(self, key: str, name: str) -> list[dict]:
+        """What to tail for a run: Claude transcript (any of the project's dirs), API events file, or a local run."""
+        if name.startswith(claude_sessions.PREFIX):
+            for d in plan_dirs(key, cfg_for(key)):
+                f = claude_sessions.find_file(d, name)
+                if f:
+                    return [{"mode": "plan", "path": f}]
+        api = CFG.runs / f"{name}.events.jsonl"
+        if not api.exists():
+            ld = hub.local_dir(key, name)
+            if ld:
+                return [{"mode": "jsonl", "path": ld / "events.jsonl"},
+                        {"mode": "local_thinking", "path": ld / "thinking.txt"},
+                        {"mode": "local_answer", "path": ld / "answer.txt"}]
+        return [{"mode": "jsonl", "path": api}]
+
+    def _stream(self, key: str, name: str) -> None:
+        srcs = self._sources(key, name)
+        log = CFG.runs / f"{name}.log"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
-        path = plan or CFG.runs / f"{name}.events.jsonl"
-        pos, last_beat, first = 0, time.time(), []
+        for st in srcs:
+            st.update(pos=0, dec=codecs.getincrementaldecoder("utf-8")("replace"), first=[])
+        last_beat = time.time()
+
+        def emit(obj_or_line):
+            line = obj_or_line if isinstance(obj_or_line, str) else json.dumps(obj_or_line, ensure_ascii=False)
+            self.wfile.write(f"data: {line}\n\n".encode("utf-8"))
+
         try:
-            if not plan and not path.exists() and (CFG.runs / f"{name}.log").exists():
-                for l in (CFG.runs / f"{name}.log").read_text(encoding="utf-8", errors="replace").splitlines():
+            if len(srcs) == 1 and srcs[0]["mode"] == "jsonl" and not srcs[0]["path"].exists() and log.exists():
+                for l in log.read_text(encoding="utf-8", errors="replace").splitlines():
                     if l.strip():
-                        self.wfile.write(f"data: {json.dumps({'kind': 'text', 'text': l}, ensure_ascii=False)}\n\n".encode())
+                        emit({"kind": "text", "text": l})
                 self.wfile.flush()
             while True:
-                if path.exists() and path.stat().st_size > pos:
+                sent = False
+                for st in srcs:
+                    path = st["path"]
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        continue
+                    if size < st["pos"]:
+                        st["pos"] = 0
+                    if size <= st["pos"]:
+                        continue
                     with path.open("rb") as fh:
-                        fh.seek(pos)
-                        chunk = fh.read()
-                    end = chunk.rfind(b"\n") + 1  # only complete lines; a partial write is picked up next poll
-                    pos += end
-                    for l in chunk[:end].decode("utf-8", errors="replace").split("\n"):
-                        if not l.strip():
-                            continue
-                        if plan:  # transcript lines -> the event shapes the page renders
-                            try:
-                                evs = claude_sessions.to_events(json.loads(l), first)
-                            except ValueError:
+                        fh.seek(st["pos"])
+                        chunk = fh.read(1 << 20)
+                    if st["mode"] in ("jsonl", "plan"):
+                        end = chunk.rfind(b"\n") + 1  # only complete lines; a partial write is picked up next poll
+                        st["pos"] += end
+                        for l in chunk[:end].decode("utf-8", errors="replace").split("\n"):
+                            if not l.strip():
                                 continue
-                            for ev in evs:
-                                self.wfile.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8"))
-                        else:
-                            self.wfile.write(f"data: {l}\n\n".encode("utf-8"))
+                            if st["mode"] == "plan":  # transcript lines -> the event shapes the page renders
+                                try:
+                                    evs = claude_sessions.to_events(json.loads(l), st["first"])
+                                except ValueError:
+                                    continue
+                                for ev in evs:
+                                    emit(ev)
+                            else:
+                                emit(l)
+                    else:  # thinking.txt / answer.txt: raw text chunks
+                        st["pos"] += len(chunk)
+                        text = st["dec"].decode(chunk)
+                        if text:
+                            emit({"kind": st["mode"], "text": text})
+                    sent = True
+                if sent:
                     self.wfile.flush()
                     last_beat = time.time()
                 elif time.time() - last_beat > 15:
@@ -671,9 +1040,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> int:
-    global CFG, SESSION_START, TOKEN
+    global SESSION_START, TOKEN, ALL_MODE, PINNED, PINNED_ENTRY
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--project", help="agentcontroller.toml (or its directory); default: walk up from the cwd")
+    ap.add_argument("--all", action="store_true", help="serve every project (default when no agentcontroller.toml is found)")
+    ap.add_argument("--project", help="pin one project: agentcontroller.toml (or its directory)")
     ap.add_argument("--port", type=int)
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; 0.0.0.0 for other devices on the LAN (needs --remote)")
@@ -681,28 +1051,57 @@ def main(argv: list[str] | None = None) -> int:
                     help="accept any Host with a token (kept in <secrets>/dash_token.txt); for LAN or a tunnel")
     ap.add_argument("--session-start", help="ISO timestamp for the session spend figure (default: today 00:00)")
     args = ap.parse_args(argv)
-    CFG = load(args.project)
+    from .config import find_project
+    found = find_project()
+    pin = args.project or (None if args.all else (str(found) if found else None))
+    ALL_MODE = pin is None
+    pcfg = load(pin) if pin else None
+    if pcfg is not None:
+        PINNED = registry.norm(registry.main_checkout(pcfg.root))
+        PINNED_ENTRY = {"key": PINNED, "path": str(pcfg.root), "name": pcfg.root.name, "sources": ["pinned"],
+                        "toml": (pcfg.root / CONFIG_NAME).is_file(), "exists": True}
     SESSION_START = args.session_start or datetime.now().strftime("%Y-%m-%dT00:00:00")
-    port = args.port or CFG.port
+    port = args.port or (registry.dash_port() if ALL_MODE else pcfg.port)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if args.host not in ("127.0.0.1", "localhost") and not args.remote:
         ap.error("--host other than 127.0.0.1 needs --remote (token auth)")
+    tok = None
     if args.remote:
-        tok = CFG.secrets / "dash_token.txt"
+        tokdir = registry.home() if ALL_MODE else pcfg.secrets
+        tok = tokdir / "dash_token.txt"
         if not tok.exists():
-            CFG.secrets.mkdir(parents=True, exist_ok=True)
+            tokdir.mkdir(parents=True, exist_ok=True)
             tok.write_text(secrets.token_urlsafe(24), encoding="utf-8")
         TOKEN = tok.read_text(encoding="utf-8").strip()
+        if ALL_MODE:
+            print("WARNING: --remote with --all exposes EVERY project (runs, transcripts, roadmaps) to anyone holding "
+                  "the token", flush=True)
     srv = ThreadingHTTPServer((args.host, port), Handler)
     srv.daemon_threads = True
-    print(f"AgentController dashboard: http://127.0.0.1:{port}/  (project {CFG.root}, runs {CFG.runs})", flush=True)
+    import threading
+    threading.Thread(target=lambda: (projects_map(), hub.claude_dirs()), daemon=True).start()  # warm the caches
+    what = "all projects" if ALL_MODE else f"project {pcfg.root}"
+    print(f"AgentController dashboard: http://127.0.0.1:{port}/  ({what})", flush=True)
     if TOKEN:
-        print(f"Remote access on {args.host}:{port}: open http://<this-host>:{port}/?token=<{CFG.secrets / 'dash_token.txt'}>"
+        print(f"Remote access on {args.host}:{port}: open http://<this-host>:{port}/?token=<{tok}>"
               " once per device (the token is then kept in a cookie)", flush=True)
+    dashfile = registry.home() / "dash.json"
+    if ALL_MODE:
+        try:
+            registry._write(dashfile, {"port": port, "pid": os.getpid(), "started": time.time()})
+        except OSError:
+            pass
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if ALL_MODE:
+            try:
+                if (registry._read(dashfile, {}) or {}).get("pid") == os.getpid():
+                    dashfile.unlink()
+            except OSError:
+                pass
     return 0
 
 

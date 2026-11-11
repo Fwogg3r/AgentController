@@ -152,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     pid = cfg.runs / f"{name}.pid"
     # Plan billing: with an API key in the environment, claude would bill the API instead.
     env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    env["AGENTCONTROLLER_PARENT"] = name
     if cfg.path_extra:
         env["PATH"] = os.pathsep.join([*cfg.path_extra, env.get("PATH", "")])
     pid.write_text(str(os.getpid()))
@@ -159,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
                             text=True).stdout.strip() or None
     events.write("start", model=model, budget=None, billing="plan", brief="agentpilot", worktree=str(cfg.root),
                  branch=branch, base=None)
+    from . import registry
+    registry.hook_start(cfg.root, name, "pilot", name=name, model=model, provider="plan", worktree=str(cfg.root))
     print(f"[pilot] {name}: up to {args.sessions} sessions / {args.hours} h on {model} in {cfg.root}",
           file=sys.stderr, flush=True)
     deadline = time.time() + args.hours * 3600
@@ -195,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         events.write("text", text=f"[pilot] ended: {reason} (plan usage ≈ ${plan_usd:.2f} API-equivalent)")
         events.write("end", reason=reason)
         pid.unlink(missing_ok=True)
+        registry.hook_end(name)
     print(f"[pilot] ended: {reason}", file=sys.stderr)
     return 0
 

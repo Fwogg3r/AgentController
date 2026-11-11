@@ -383,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="return thinking text for the dashboard (display only; default from config)")
     ap.add_argument("--resume", help="session id to continue (the brief becomes the follow-up message)")
     ap.add_argument("--no-textlog", action="store_true", help="don't write <name>.log (stderr is redirected there)")
+    ap.add_argument("--parent", help="name of the run that spawned this one (default $AGENTCONTROLLER_PARENT)")
+    ap.add_argument("--roadmap", help="roadmap item id this run works on (shown in the dashboard's roadmap tab)")
     ap.add_argument("--check-policy", action="store_true", help="self-test the deny list and exit")
     args = ap.parse_args(argv)
     cfg = load(args.project)
@@ -438,7 +440,8 @@ def main(argv: list[str] | None = None) -> int:
         settings=json.dumps({"apiKeyHelper": f"cat {key_file}"}),
         # Tool results can carry base64 screenshots; the 1 MB default aborts the run.
         max_buffer_size=64 * 1024 * 1024,
-        env={"PATH": os.pathsep.join([*cfg.path_extra, os.environ.get("PATH", "")])},
+        env={"PATH": os.pathsep.join([*cfg.path_extra, os.environ.get("PATH", "")]),
+             "AGENTCONTROLLER_PARENT": args.name},  # agents started by this agent are linked to it
         resume=args.resume,
         include_partial_messages=True,  # feeds `progress` events; the stream itself is not logged
         extra_args={"thinking-display": td} if (td := args.thinking_display or cfg.thinking_display) else {},
@@ -452,6 +455,9 @@ def main(argv: list[str] | None = None) -> int:
     events = EventLog(cfg.runs / f"{args.name}.events.jsonl")
     events.write("start", model=model_id, budget=args.budget, session_id=args.resume, brief=Path(args.brief).name,
                  worktree=str(wt), branch=args.name, base=base)
+    from . import registry
+    registry.hook_start(cfg.root, args.name, "api", name=args.name, model=model_id, worktree=str(wt),
+                        parent=args.parent, roadmap=args.roadmap)
     try:
         out, key_source = asyncio.run(run_agent(
             Path(args.brief).read_text(encoding="utf-8"), options, events, cfg.runs / f"{args.name}.inbox.jsonl",
@@ -459,6 +465,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         events.write("end")
         (cfg.runs / f"{args.name}.pid").unlink(missing_ok=True)
+        registry.hook_end(args.name)
     if key_source != "apiKeyHelper":
         print(f"[warn] agent authenticated via {key_source!r}, not the API key", file=sys.stderr)
 

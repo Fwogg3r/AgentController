@@ -1,8 +1,16 @@
 # AgentController
 
-Launch, watch and steer budget-capped [Claude Agent SDK](https://docs.claude.com) agents from a small localhost dashboard.
-Each agent works in its own git worktree on its own branch, billed to an API key with a hard USD cap per run
+Launch, watch and steer budget-capped [Claude Agent SDK](https://docs.claude.com) agents, and run local-model coding
+agents (LM Studio + aider), from one always-on localhost dashboard that shows every agent in every project.
+Each API agent works in its own git worktree on its own branch, billed to an API key with a hard USD cap per run
 and a cap across all runs. One Python package, standard library plus the SDK, no Node and no build step.
+
+What's in it:
+
+- **`agentctl`**: budget-capped Claude API agents in worktrees. **`agentask`**: one-shot API calls and design debates, spend and balance checks. **`agentpilot`**: back-to-back plan-billed `claude -p` sessions.
+- **`agentlocal`**: a staged pipeline for local models (idea -> plan -> stages -> edit -> test), with tiers that set how much freedom a model gets. See [Local agents](#local-agents-agentlocal).
+- **`agentdash`**: the unified dashboard ([docs/unified-dash.md](docs/unified-dash.md), decision in [docs/DECISIONS.md](docs/DECISIONS.md)). See [Dashboard](#dashboard).
+- Skills for Claude Code: `/api-request` and `/batchy`.
 
 ## Why the Agent SDK and not `claude -p`
 
@@ -24,9 +32,10 @@ Then restart Claude Code. The installer:
 
 | What | Where |
 |---|---|
-| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
+| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
 | **`/api-request`** skill: one-shot asks and design debates with another model, background API agents, dashboard, spend | `~/.claude/skills/api-request/` (`SKILL.md` + `ask_api.py`) |
 | **`/batchy`** skill + `claude-batch` MCP server: non-urgent work through the Message Batches API at 50% off | Fetched from [s2-streamstore/claude-batch-toolkit](https://github.com/s2-streamstore/claude-batch-toolkit) at a pinned commit into `~/.claude/skills/batchy/` and `~/.claude/mcp/`, registered in `~/.claude.json` |
+| Windows: the hidden Task Scheduler logon task **"AgentController dashboard"** (`agentdash --all`, so the dashboard is always up at http://127.0.0.1:8765/) and `~/.agentcontroller/config.toml` with commented defaults | Task Scheduler, `~/.agentcontroller/` |
 | With `--init PATH`: `agentcontroller.toml`, a gitignored `.agentcontroller/`, your key in `.agentcontroller/api.key` | the project |
 
 The API key never goes into a global `ANTHROPIC_API_KEY`: if it did, Claude Code itself would bill the API instead of
@@ -38,7 +47,10 @@ and the budget cap come from the runs' own estimates, so no admin key is needed.
 `.agentcontroller/admin.key` (`admin_key_file` in the toml) for `agentusage`, which reports actual billed spend from
 the Admin API (organisation-wide, daily, hours of lag; `--by-key` splits tokens per key). It doesn't feed the dashboard.
 
-Options: `--key-file F` (read the key from a file), `--dry-run`, `-y` (no prompts), `--no-batchy`, `--no-tool`,
+Re-run `uv run install.py` to refresh. On Windows close a running `agentdash` first (it locks the tool directory), or pass `--no-tool`.
+The CLIs also start the dashboard if it is down (`schtasks /Run` first, then a hidden spawn).
+
+Options: `--key-file F` (read the key from a file), `--dry-run`, `-y` (no prompts), `--no-batchy`, `--no-tool`, `--no-dash-task` (skip the logon task),
 `--statusline` (the toolkit's batch status line; this also writes the key to `~/.claude/env`, which only that
 script sources), `--uninstall` (removes the skills, the MCP entry and the tool; keeps `~/.claude/batches`).
 
@@ -47,7 +59,7 @@ In Claude Code:
 - `/api-request should we use a BVH or a uniform grid here? ask opus` - one-shot call, recorded in the dashboard.
 - `/api-request agent: implement the brief in briefs/x.md` - a budget-capped agent in its own worktree.
 - `/batchy review src/ for security issues` - submitted to the Batch API; `/batchy check` later.
-- `agentdash` in a terminal - http://127.0.0.1:8765/ shows runs, costs, steering and your Claude Code sessions.
+- Open http://127.0.0.1:8765/ (or run `agentdash`) to see runs, costs, steering, Claude Code sessions, local agents, the roadmap and pmjc jobs for every project.
 
 The skill is called `api-request`, not `claude-api`, because Claude Code ships a built-in `claude-api` skill
 (the SDK reference). `ask_api.py` works without the tool installed (it falls back to `uvx` from GitHub):
@@ -61,11 +73,11 @@ cp /path/to/agentcontroller/examples/agentcontroller.toml .
 mkdir .agentcontroller && echo ".agentcontroller/" >> .gitignore
 echo "sk-ant-..." > .agentcontroller/api.key        # your API key, never committed
 
-uv tool install /path/to/agentcontroller             # commands: agentctl agentdash agentpilot agentwatch agentwait agentusage agentask
+uv tool install /path/to/agentcontroller             # commands: agentctl agentdash agentpilot agentwatch agentwait agentusage agentask agentlocal
 agentdash                                            # http://127.0.0.1:8765/  -> "+ New agent"
 ```
 
-Without installing: `uv run --project /path/to/agentcontroller agentdash --project .`.
+Without installing: `uv run --project /path/to/agentcontroller agentdash --project .` (`--project X` is `--all` pinned to X).
 Or from the CLI: `agentctl --brief briefs/task.md --name my-task --base main --model sonnet --budget 3`.
 `agentctl --check-policy` self-tests the shell deny list.
 
@@ -77,9 +89,33 @@ those rules and in the project's own `CLAUDE.md`; nothing project-specific is in
 
 ## Dashboard
 
-A page in Claude Code's terminal look (dark, monospace, terracotta accents) that works in a narrow split-screen window.
-"Clawd", the orange pixel-art critter, sits in the header and beside every run: bobbing while the agent works, dozing
-while it waits, asleep ("zz") when finished, with a "!" when it crashed.
+`agentdash --all` (the default) is one dashboard for every project, in Claude Code's terminal look (dark, monospace,
+terracotta accents; works in a narrow split-screen window). Spec: [docs/unified-dash.md](docs/unified-dash.md).
+
+- **Projects:** a list with live counts (working / waiting / crashed); discovered from the registry (`~/.agentcontroller`, filled by the CLIs), Claude Code transcript directories and `[dash] scan`. "All projects" merges them. Model checkboxes filter every list.
+- **Icons per agent kind** (`AGENT_PROFILES` in `index.html`): "Clawd", the orange pixel-art critter, for Claude (bobbing while it works, dozing while it waits, asleep when finished, "!" when crashed); an original Qwen critter for local Qwen; a chip for any other local model.
+- **Trees:** runs with a `parent` (`--parent`, `AGENTCONTROLLER_PARENT`, Claude plan subagents) nest under it; a parent collapses to "(n agents)".
+- **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (the project's `docs/roadmap`, with agents linked by `--roadmap ID`) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
+- **Local runs:** a context gauge (tokens of the last call vs the window, per-call history), a thinking pane apart from answer/edits/tests, stage progress, and approval buttons.
+- **Attention queue:** the header badge lists what needs you: local approvals, pmjc approvals, crashes in the last 24 h, waiting Claude sessions.
+- **Global config** `~/.agentcontroller/config.toml` (all keys optional):
+
+```toml
+include = "Z:/shared/agentcontroller/dash.toml"   # merged first; this file's keys win
+[dash]
+port = 8765
+scan = ["~/Documents/GitHub"]     # also list repos here that have an agentcontroller.toml
+hide = ["C:/some/repo"]
+[pmjc]
+url = "http://127.0.0.1:8770"
+token_file = "Z:/secrets/pmjc/agentdash.token"   # a pmjc API token with the `jobs` scope (`admin` only for approvals)
+[lmstudio.hosts]
+local = "http://127.0.0.1:1234"
+```
+
+Writes (POSTs) also need the header `X-AC: 1`. The pmjc token never leaves the server. Planned work: [docs/roadmap](docs/roadmap) phase 2.
+
+The per-project features below apply as before.
 
 - **Run states** (`state` in `/api/runs`, derived from the events log and the PID):
   `working` (thinking / writing / running a tool, with the tool and its elapsed time), `waiting` (with the reason:
@@ -138,6 +174,25 @@ The runner appends structured events to `<runs>/<name>.events.jsonl` and polls `
 **streaming** generator: this is also what keeps the SDK's permission callback (`can_use_tool`) alive. A run ends by itself
 2 s after a result when no message is pending. Background tasks (`run_in_background`) hold the run open until they end
 and the agent has answered their notification; closing the stream earlier breaks every later tool approval ("Stream closed").
+
+## Local agents (`agentlocal`)
+
+Coding agents on your own models (LM Studio, with aider doing the edits). The owner's models and tiers go in a tiers file:
+copy [examples/tiers.example.toml](examples/tiers.example.toml), point `AGENTCONTROLLER_TIERS` (or `[local].tiers_path` in
+`agentcontroller.toml`) at it. Run inside a git repo, ideally a worktree on its own branch (it refuses `main` and a dirty tree):
+
+```sh
+agentlocal probe --model qwen-27b                          # measure context, chars/token, no-think handling
+agentlocal run "add a --json flag to the CLI" --model qwen-27b          # staged pipeline: plan, stages, edit, test, fix
+agentlocal run @brief.md --model qwen-27b --tier aider-edit --files a.py b.py   # one aider call with a brief
+agentlocal plan "idea" --model qwen-27b           # only the stage plan, to approve first
+agentlocal status | resume <run>
+```
+
+Tiers set the stage size, files per stage, thinking budget, autonomy and which steps wait for you (`gates`: plan, stage,
+tests, protected files). Approve in the console or in the dashboard. The model never picks shell commands: agentlocal runs
+the configured test command, and files changed outside a stage's list are reverted. Launch it from a terminal, not from
+an auto-mode Claude session. Runs register themselves, so they appear in the dashboard with the gauge and thinking pane.
 
 ## One-shot calls (`agentask`)
 
