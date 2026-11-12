@@ -32,3 +32,12 @@ Review: [docs/reviews/2026-11-10-access-opus.md](reviews/2026-11-10-access-opus.
 - **Endpoint table, default-deny.** GETs are `view` except `/api/billed` (`operate`); POST inbox, local_approve, primary, launch, kill are `operate`; archive, worktree_delete, forget_project are `admin`; anything not in the table needs `admin`. Non-admins get scrubbed output (service URLs, error text, project paths, pmjc approval links); `/api/config` holds no key-file paths. `/api/me` returns `{email, level}` (`{local: true}` on the loopback port, `{lan: true}` with the token, both admin) and the page hides controls above the level; the server is the authority.
 - **CSRF and audit.** POSTs on the access listener need JSON content type, `X-AC: 1` and an `Origin` exactly equal to `public_origin` (missing Origin is rejected). Every POST and every denied request goes to `access-audit.jsonl` (e-mail, level, method, path, query, body keys; text values over 200 chars are not logged).
 - **Deferred:** rate limits and per-user budget caps for `operate` (roadmap phase2/u).
+
+## roadmap CLI tracks WebRoadmap main (2026-11-12)
+Review: [docs/reviews/2026-11-12-roadmap-tracks-main.md](reviews/2026-11-12-roadmap-tracks-main.md) (Opus-level critique). Roadmap phase2/ad.
+
+- **Options considered:** keep the pin and bump it by hand; `uvx --from git+...@main` on every call; `uv tool upgrade`; a WebRoadmap post-merge hook; install.py + doctor only; a helper that installs main's exact SHA at safe points.
+- **Decision: the helper** (`agentcontroller/roadmap_tool.py`), called by install.py on every run, agentdash at startup and on Roadmap page loads (at most every 10 min), and agentdoctor (warn when behind). WebRoadmap is the owner's own single-source tool, so it is the documented exception to "third-party tools at pinned commits"; aider and claude-batch-toolkit stay pinned.
+- **Safety:** never `uv tool install --force` while a `roadmap` process runs (Windows locks the tool dir and a failed force-install leaves the CLI broken); agentdash stops its own serves (whole process tree) first; verify `roadmap --help` and retry once; offline keeps the installed version. Trade-off accepted: a broken WebRoadmap main reaches the dashboard at once.
+- **Rejected:** a timed upgrade loop that kills serves while the owner views them; `uvx` per call (too slow per request); `uv tool upgrade` (doesn't reliably move a git source); a post-merge hook in WebRoadmap (misses GitHub merges, wrong repo).
+

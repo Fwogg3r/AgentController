@@ -20,11 +20,14 @@ from pathlib import Path
 from .runner import call_usd
 
 RUNNING_IDLE = 120        # file written within this many seconds: running
+BG_IDLE = 6 * 3600        # open background tasks / an unanswered question keep a session "waiting" this long
 PENDING_IDLE = 30 * 60    # an unfinished tool call keeps a quiet session "running" this long (a subagent may be working)
 DEFAULT_AGE = 7 * 86400
 MAX_SESSIONS = 40
 PREFIX = "plan."
 _LOCK = threading.Lock()
+_BG_START = re.compile(r"Command running in background with ID: (\w+)|Async agent launched successfully.*?agentId: (\w+)", re.S)
+_BG_NOTE = re.compile(r"<task-id>(\w+)</task-id>.*?<status>(\w+)</status>", re.S)
 
 
 def slug_of(root: Path) -> str:
@@ -84,6 +87,9 @@ def tool_arg(name: str, inp) -> str:
     key = {"Bash": "command", "PowerShell": "command", "Read": "file_path", "Edit": "file_path", "Write": "file_path",
            "Grep": "pattern", "Glob": "pattern", "Agent": "description", "WebFetch": "url", "WebSearch": "query"}.get(name)
     v = inp.get(key) if key else None
+    qs = inp.get("questions") if name == "AskUserQuestion" else None
+    if isinstance(qs, list) and qs and isinstance(qs[0], dict):
+        v = qs[0].get("question")
     if v is None:
         v = next((x for x in inp.values() if isinstance(x, str)), "")
     return _first_line(str(v), 140)
@@ -107,6 +113,7 @@ class Parsed:
     last_kind: str = ""
     last_text: str = ""
     turn_done: bool = False  # the last assistant message ended the turn: idle, however recently it was written
+    bg: dict = field(default_factory=dict)  # background task id -> "Tool: arg", until its task-notification arrives
 
     def feed(self, e: dict) -> None:
         ts = e.get("timestamp")
@@ -147,7 +154,15 @@ class Parsed:
             self.turn_done = False  # a prompt or a background-task notification starts a turn
             for b in content if isinstance(content, list) else []:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
-                    self.pending.pop(b.get("tool_use_id"), None)
+                    call = self.pending.pop(b.get("tool_use_id"), None)
+                    c = b.get("content")
+                    m = _BG_START.search(c if isinstance(c, str) else _text_of(c))
+                    if m:  # run_in_background Bash or a background agent: done when its notification arrives
+                        self.bg[m.group(1) or m.group(2)] = f"{call[0]}: {call[1]}" if call else "background task"
+            if self.bg and "<task-notification>" in (raw := content if isinstance(content, str) else _text_of(content)):
+                for tid, status in _BG_NOTE.findall(raw):
+                    if status != "running":
+                        self.bg.pop(tid, None)
             if _is_prompt(e):
                 # shown on the card until the model starts answering
                 self.last_kind, self.last_text = "user", _first_line(_prompt_text(content), 160)
@@ -238,7 +253,14 @@ def duration_fields(started: str | None, ended: str | None, active: bool, now: f
 def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, now: float, meta: dict | None = None) -> dict:
     idle = max(0.0, now - p.mtime)
     running = not p.turn_done and (idle < RUNNING_IDLE or (bool(p.pending) and idle < PENDING_IDLE))
-    if p.pending:
+    question = next((a for n, a in p.pending.values() if n == "AskUserQuestion"), None)
+    waiting = idle < BG_IDLE and (question is not None or (not running and bool(p.bg)))
+    if waiting and question is not None:
+        act = {"kind": "question", "text": f"question: {question}".strip(" :")}
+    elif waiting:
+        descs = list(p.bg.values())
+        act = {"kind": "task", "text": f"background task{'s' if len(descs) > 1 else ''}: " + "; ".join(descs)[:200]}
+    elif p.pending:
         n, a = next(iter(reversed(p.pending.values())))
         act = {"kind": "tool", "text": f"{n}: {a}"}
     else:
@@ -251,12 +273,14 @@ def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, no
         except ValueError:
             pass
     model = p.model or (meta or {}).get("model")
+    state = "waiting" if waiting else "working" if running else "finished"
+    running = running or waiting
     return {
         "name": name, "kind": kind, "parent": parent, "title": title or name, "plan": True,
         "model": model, "cost": round(p.tot["usd"], 4), "cost_estimate": True, "turns": len(p.msgs),
         "tool_calls": p.tool_calls, "tokens_in": p.tot["in"], "tokens_out": p.tot["out"],
         "cache_read": p.tot["cr"], "cache_write": p.tot["cw"],
-        "state": "working" if running else "finished", "outcome": None if running else "success",
+        "state": state, "outcome": None if running else "success", "bg_tasks": len(p.bg),
         "active": running, "activity": act if running else None,
         "started": _local(p.first_ts), "last_activity": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(p.mtime)),
         "idle_seconds": round(idle), "oneshot": False, "legacy": False, "commits": [], "worktree": None, "branch": None,

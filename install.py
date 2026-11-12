@@ -19,7 +19,7 @@ Steps:
      into that server's own `env` (its process), never into a global ANTHROPIC_API_KEY.
   4. Windows: a Task Scheduler logon task "AgentController dashboard" running `agentdash --all` hidden
      (--dash-task / --no-dash-task), and ~/.agentcontroller/config.toml with commented defaults.
-  5. The `roadmap` CLI (WebRoadmap, pinned commit) as a uv tool, for the dashboard's Roadmap tab (asks first; -y skips
+  5. The `roadmap` CLI (WebRoadmap, latest main; upgraded on every run) as a uv tool, for the dashboard's Roadmap tab (asks first; -y skips
      the question; --no-roadmap skips it). With --local (or when you say yes): aider at a pinned commit.
   6. Checks for the Claude Code CLI (never installs system software; prints how), then runs `agentdoctor`.
   7. Optional --statusline: the toolkit's batch status line (it sources ~/.claude/env, which then holds
@@ -45,8 +45,9 @@ BATCH_COMMIT = "feb9ff9c5e060ea3abb6829411254222e7d60577"
 BATCH_MODEL = "claude-opus-5-5"  # upstream's default (claude-opus-4-6) is out of date
 API_SKILL = "api-request"  # not "claude-api": that name is Claude Code's built-in API reference skill
 MCP_NAME = "claude-batch"
+# WebRoadmap is the owner's own single-source tool, so it tracks main (agentcontroller/roadmap_tool.py) instead of a pin.
+ROADMAP_SPEC = "git+https://github.com/Fwogg3r/WebRoadmap"
 # Third-party tools installed from GitHub at pinned commits (bump after testing, like BATCH_COMMIT).
-ROADMAP_SPEC = "git+https://github.com/Fwogg3r/WebRoadmap@108eb29893362f30ef6d7f9ba6b971e82bf9da69"
 AIDER_SPEC = "git+https://github.com/Aider-AI/aider.git@253f0368b873ba30d8ee26e463718f0c03614ddf"
 AIDER_PYTHON = "3.12"  # aider's pinned dependency set is built for 3.12
 CLAUDE_HINT = ("Claude Code (https://docs.claude.com/en/docs/claude-code/setup): `npm install -g @anthropic-ai/claude-code` "
@@ -155,22 +156,29 @@ def tool_exe(name: str) -> str | None:
 
 
 def install_roadmap(args, claude: Path) -> None:
-    """The `roadmap` CLI (WebRoadmap) at a pinned commit, plus its Claude skill."""
+    """The `roadmap` CLI (WebRoadmap) at its latest main (installed, or upgraded when behind), plus its Claude skill."""
     if args.no_roadmap:
         return
+    from agentcontroller import roadmap_tool
     exe = tool_exe("roadmap")
-    if exe:
-        say("skip", "the roadmap CLI is already installed")
-    elif confirm(args, "Install the roadmap CLI (WebRoadmap, for the dashboard's Roadmap tab) with uv?", True):
-        try:
-            run(["uv", "tool", "install", ROADMAP_SPEC])
-        except subprocess.CalledProcessError:
-            say("warn", f"couldn't install the roadmap CLI; try `uv tool install {ROADMAP_SPEC}`")
-            return
-        exe = tool_exe("roadmap")
-    else:
+    if not exe and not confirm(args, "Install the roadmap CLI (WebRoadmap, for the dashboard's Roadmap tab) with uv?", True):
         say("skip", "roadmap CLI not installed (the Roadmap tab stays empty)")
         return
+    if DRY:
+        say("run", f"uv tool install --force {ROADMAP_SPEC}@<main> (when missing or behind WebRoadmap main)")
+    else:
+        r = roadmap_tool.ensure_latest(log=lambda m: say("run", m))
+        short = (r.get("installed") or "?")[:7]
+        if r["action"] == "current":
+            say("skip", f"the roadmap CLI is already at WebRoadmap main ({short})")
+        elif r["action"] == "upgraded":
+            say("ok", f"roadmap CLI now at WebRoadmap main ({short})")
+        else:
+            say("warn", f"roadmap CLI not updated: {r.get('error')}"
+                        + ("" if r["ok"] else f"; fix: close agentdash, then `uv tool install --force {ROADMAP_SPEC}`"))
+            if not r["ok"]:
+                return
+        exe = tool_exe("roadmap")
     dest = claude / "skills" / "roadmap"
     if (dest / "SKILL.md").exists():
         say("skip", "the roadmap skill is already installed")

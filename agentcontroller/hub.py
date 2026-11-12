@@ -45,7 +45,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import NO_WINDOW, claude_sessions, registry
+from . import NO_WINDOW, claude_sessions, registry, roadmap_tool
 
 CLAUDE_BASE = Path.home() / ".claude" / "projects"
 _lock = threading.Lock()
@@ -497,8 +497,9 @@ def roadmap(path: str) -> dict:
     if not exe:
         return {"ok": False, "error": "the `roadmap` CLI isn't installed: uv tool install git+https://github.com/Fwogg3r/WebRoadmap"}
     try:
-        p = subprocess.run([exe, "--dir", str(rdir), "--json", "list"], capture_output=True, text=True,
-                           encoding="utf-8", timeout=20, **NO_WINDOW)
+        with roadmap_tool.LOCK:  # not while an upgrade is replacing the tool
+            p = subprocess.run([exe, "--dir", str(rdir), "--json", "list"], capture_output=True, text=True,
+                               encoding="utf-8", timeout=20, **NO_WINDOW)
         data = json.loads(p.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         return {"ok": False, "error": f"roadmap list failed: {e}"}

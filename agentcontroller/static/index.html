@@ -107,7 +107,9 @@ main { flex:1; display:flex; min-height:0; }
 /* transcript */
 .ln { white-space:pre-wrap; word-break:break-word; padding-left:2ch; text-indent:-2ch; cursor:pointer; }
 .ln.sel { background:var(--user); }
-.ln .b { color:var(--ink); } .ln.toolln .b { color:var(--ok); } .ln.toolln.err .b { color:var(--bad); } .ln.toolln.open .b { color:var(--muted); }
+.ln .b { color:var(--ink); } .ln.toolln .b { color:var(--ok); } .ln.toolln.err .b { color:var(--bad); } .ln.toolln.open .b { color:var(--ok); display:inline-block; animation:toolpulse 1.2s ease-in-out infinite; }
+@keyframes toolpulse { 0%, 100% { opacity:1; transform:scale(1); } 50% { opacity:.25; transform:scale(.7); } }
+@media (prefers-reduced-motion: reduce) { .ln.toolln.open .b { animation:none; color:var(--muted); } }
 .ln .tn { font-weight:700; }
 .res { color:var(--muted); white-space:pre-wrap; word-break:break-word; padding-left:5ch; text-indent:-3ch; max-height:7.5em; overflow:hidden; cursor:pointer; }
 .res.full { max-height:none; }
@@ -139,12 +141,40 @@ details.tool { background:var(--tool); border-radius:10px; padding:3px 10px; fon
 details.tool summary { cursor:pointer; list-style:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .sys { color:var(--muted); font-size:12px; }
 .md { line-height:1.55; padding:2px 0 6px; }
-.md h1,.md h2,.md h3,.md h4 { margin:10px 0 4px; font-size:14px; color:var(--accent); }
-.md p { margin:4px 0; } .md ul,.md ol { margin:4px 0; padding-left:22px; }
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6 { margin:10px 0 4px; font-size:14px; color:var(--ink); font-weight:700; }
+.md h1 { font-size:16px; } .md h2 { font-size:15px; } .md h3 { font-style:italic; } .md h4,.md h5,.md h6 { color:var(--muted); }
+.md p { margin:4px 0; } .md ul,.md ol { margin:4px 0; padding-left:22px; } .md li > ul,.md li > ol { margin:2px 0; }
+.md a { color:var(--accent); text-decoration:underline; text-underline-offset:2px; }
+.md blockquote { margin:6px 0; padding:0 0 0 10px; border-left:3px solid var(--line); color:var(--muted); }
+.md hr { border:0; border-top:1px solid var(--line); margin:10px 0; }
+.md .tbl { overflow-x:auto; margin:6px 0; }
+.md table { border-collapse:collapse; font-size:inherit; }
+.md th,.md td { border:1px solid var(--line); padding:3px 8px; text-align:left; vertical-align:top; }
+.md th { background:var(--card); font-weight:700; }
+.md .tk { color:var(--muted); } .md .tk.done { color:var(--ok); }
+.md :first-child { margin-top:0; } .md > :last-child { margin-bottom:0; }
+.ln.mdln { display:grid; grid-template-columns:2ch minmax(0, 1fr); white-space:normal; text-indent:0; padding-left:0; }
+.ln.mdln .md { padding:0; min-width:0; }
 .md pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; overflow:auto; white-space:pre; margin:6px 0; }
 .md code { background:var(--card); padding:0 4px; border-radius:4px; } .md pre code { background:none; padding:0; }
 .promptblk summary { cursor:pointer; color:var(--muted); } .promptblk pre { white-space:pre-wrap; word-break:break-word; margin:4px 0; max-height:40vh; overflow:auto; }
 #composer { border-top:1px solid var(--line); padding:10px 14px; display:flex; flex-direction:column; gap:6px; }
+.qcard { border:1px solid var(--accent); border-radius:10px; padding:8px 10px; margin:6px 0; background:var(--card); }
+.qcard.done { border-color:var(--line); opacity:.85; }
+.qcard .qh { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--accent); margin-top:6px; }
+.qcard .qq { font-weight:600; margin:2px 0 6px; white-space:pre-wrap; }
+.qcard .qo { display:flex; gap:8px; align-items:flex-start; padding:4px 6px; border-radius:6px; cursor:pointer; }
+.qcard .qo:hover { background:var(--user); }
+.qcard .qo small { display:block; color:var(--muted); }
+.qcard .qo input { all:revert; flex:none; margin:3px 0 0; accent-color:var(--accent); }
+.qcard .qo > div { flex:1; min-width:0; text-align:left; }
+.qcard input[type=text] { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; margin-top:4px; box-sizing:border-box; }
+.qcard .qa { color:var(--ok); white-space:pre-wrap; margin-top:4px; }
+#qdlg { width:min(560px, calc(100vw - 20px)); }
+#files { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
+#files:empty { display:none; }
+#composer.drop { outline:2px dashed var(--accent); }
+.rid { font-size:11px; font-style:italic; color:var(--muted); margin:1px 0 3px; }
 textarea { width:100%; resize:vertical; min-height:54px; max-height:200px; font:inherit; color:var(--ink); background:var(--card);
   border:1px solid var(--line); border-radius:12px; padding:8px 10px; }
 textarea:focus { outline:2px solid var(--accent); border-color:var(--accent); }
@@ -439,9 +469,12 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
       <div id="stream"><div class="empty">Select a run.</div></div>
       <div id="spinner"></div>
       <div id="composer" class="need-operate">
+        <div id="files"></div>
         <textarea id="text" placeholder="Message for the selected run (or text to forward). Click a line to select it for forwarding."></textarea>
         <div class="row">
           <button class="primary" id="send">Send to agent</button>
+          <button id="attach" title="Attach files (or paste / drop them here)">Attach</button>
+          <input type="file" id="fileinp" multiple hidden>
           <button class="danger" id="stop">Stop<span class="lg"> after this turn</span></button>
           <button id="fwd">Forward<span class="lg"> to primary</span></button>
           <span class="hint" id="hint"></span>
@@ -487,6 +520,7 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
   <div class="err" id="n-err"></div>
   <div class="row" style="margin-top:8px"><button class="primary" id="n-go">Launch</button><button id="n-cancel">Cancel</button></div>
 </dialog>
+<dialog id="qdlg"><div id="qdlg-body"></div></dialog>
 <dialog id="confdlg">
   <h2 id="c-title"></h2><div class="msg" id="c-msg"></div>
   <div class="row"><button class="primary" id="c-ok">Confirm</button><button id="c-cancel">Cancel</button></div>
@@ -678,6 +712,7 @@ function actLine(r, a) {
     case "tool": return ["Running " + a.text + "…", meta];
     case "task": return ["Waiting for " + (a.text || "").replace(/^waiting for /i, ""), `(${el_})`];
     case "approval": return [a.text || "waiting for approval", `(${el_})`];
+    case "question": return ["Waiting for your answer: " + (a.text || "").replace(/^question:?\s*/, ""), `(${el_})`];
     case "notification": case "inbox": case "rate_limit": case "retry": return ["Waiting: " + a.text, `(${el_})`];
     default: return [a.text || a.kind, ""];
   }
@@ -764,6 +799,7 @@ async function loadAttention() {
   const a = await jget("/api/attention");
   if (!Array.isArray(a)) return;
   attention = a;
+  setTimeout(popQuestions, 0);
   $("#attn-n").textContent = a.length; $("#attn").classList.toggle("zero", !a.length);
   if (!$("#attn-pop").hidden) drawAttention();
 }
@@ -953,8 +989,10 @@ function drawRunHead() {
   if (!r) return;
   const ic = el("div"); ic.innerHTML = iconOf(r, 36);
   const body = el("div"); body.style.minWidth = 0;
-  const b = el("div"); b.innerHTML = "<b></b> "; b.firstChild.textContent = r.name;
+  const ttl = r.title && r.title !== r.name ? r.title : r.name;
+  const b = el("div"); b.innerHTML = "<b></b> "; b.firstChild.textContent = ttl;
   if (r.project_name) b.append(el("span", "pill prj", r.project_name));
+  if (ttl !== r.name) { const id = el("div", "rid", r.name); id.title = "run id"; b.append(id); }
   const prof = profileOf(r);
   if (r.local) {
     b.append(`${prof.label} · model ${r.model || "?"}${r.model_id && r.model_id !== r.model ? " (" + r.model_id + ")" : ""} · tier ${r.tier || "?"} · stages ${r.stages_done ?? 0}/${r.stages_total ?? "?"} · ${r.worktree ? "worktree " + r.worktree : "no worktree"} · ${ktok(r.tokens_in) ?? 0} in / ${ktok(r.tokens_out) ?? 0} out`);
@@ -976,7 +1014,7 @@ function drawRunHead() {
   body.append(act);
   h.append(ic, body, el("span", "rhx", "\u25BE"));
   if (r.local) drawLocalStatic(r);
-  $("#send").disabled = $("#stop").disabled = !live || !!r.plan;
+  $("#send").disabled = $("#stop").disabled = $("#attach").disabled = !live || !!r.plan;
 }
 async function fetchGit(project, name) {   // /api/runs?p=* skips git info; the per-project call has it
   const r = allRuns.find(x => x.project === project && x.name === name);
@@ -989,46 +1027,106 @@ function select(project, name, auto) {
   if (typeof project === "object") { name = project.name; project = project.project; }
   if (!auto && isMob()) openDetail();
   if (sel !== ALL && sel !== project) { sel = project; LS.set("project", sel); loadCfg(); loadSpend(); }
-  current = { project, name }; selBubble = null; openTools = {}; toolQueue = []; stick = true; lastTop = 0;
+  current = { project, name }; selBubble = null; openTools = {}; qCards = {}; toolQueue = []; stick = true; lastTop = 0;
   if (es) es.close();
   $("#stream").textContent = ""; resetLocal();
   setTab("agents");
   fetchGit(project, name);
   es = new EventSource("/api/stream?" + qs({ p: project, run: name }));
-  es.onmessage = ev => { try { const e = JSON.parse(ev.data); if (curRun()?.local || /^local_/.test(e.kind)) lrender(e); else render(e); } catch {} };
+  // Events are rendered in batches, once per frame: a backlog of hundreds of events then costs one layout, not hundreds.
+  const mine = es, queue = [];
+  const flush = () => {
+    if (es !== mine) return;
+    const batch = queue.splice(0), local = !!curRun()?.local;
+    for (const data of batch) { try { const e = JSON.parse(data); if (local || /^local_/.test(e.kind)) lrender(e); else render(e); } catch {} }
+  };
+  es.onmessage = ev => {   // hidden tabs get no animation frames: a timer keeps them current
+    if (!queue.length) (document.hidden ? f => setTimeout(f, 100) : requestAnimationFrame)(flush);
+    queue.push(ev.data);
+  };
   drawAll();
 }
 
-// ---- markdown (small, escape-first: headings, fences, lists, bold/italic, inline code) ----
-const escHtml = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// ---- markdown (escape-first; what Claude Code renders: headings, fences, nested and task lists, tables,
+// blockquotes, rules, links, bold/italic/strikethrough, inline code) ----
+const escHtml = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const safeUrl = u => /^(https?:|mailto:|#|\/(?!\/))/i.test(u) ? u : null;
 function mdInline(s) {
-  return escHtml(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>");
+  const keep = [];   // code spans and links are rendered first and protected from the emphasis rules
+  const put = h => "\u0000" + (keep.push(h) - 1) + "\u0000";
+  s = String(s).replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, (_, __, c) => put("<code>" + escHtml(c.replace(/^ (.*) $/, "$1")) + "</code>"));
+  s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (m, t, u) => {
+    const url = safeUrl(u);
+    return url ? put(`<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${escHtml(t)}</a>`) : m;
+  });
+  s = s.replace(/<?(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"\]])>?/g, (_, u) => put(`<a href="${escHtml(u)}" target="_blank" rel="noopener noreferrer">${escHtml(u)}</a>`));
+  s = escHtml(s)
+    .replace(/\*\*\*([^*\n]+)\*\*\*/g, "<b><i>$1</i></b>")
+    .replace(/\*\*([^*\n]+?)\*\*/g, "<b>$1</b>").replace(/(^|[^\w])__([^_\n]+?)__(?!\w)/g, "$1<b>$2</b>")
+    .replace(/(^|[^*\w])\*([^*\s](?:[^*\n]*[^*\s])?)\*(?!\*)/g, "$1<i>$2</i>")
+    .replace(/(^|[^\w])_([^_\s](?:[^_\n]*[^_\s])?)_(?!\w)/g, "$1<i>$2</i>")
+    .replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
 }
 function mdToHtml(src) {
-  src = String(src || "");
-  const out = []; let list = null, para = [], fence = null;
+  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let para = [], lists = [];   // lists: open <ul>/<ol> stack [{tag, indent}]
   const endPara = () => { if (para.length) out.push("<p>" + para.map(mdInline).join("<br>") + "</p>"); para = []; };
-  const endList = () => { if (list) out.push("</" + list + ">"); list = null; };
-  for (const raw of src.split("\n")) {
-    if (fence !== null) {
-      if (/^\s*```/.test(raw)) { out.push("<pre><code>" + escHtml(fence) + "</code></pre>"); fence = null; }
-      else fence += (fence ? "\n" : "") + raw;
+  const endLists = (to = 0) => { while (lists.length > to) out.push("</li></" + lists.pop().tag + ">"); };
+  const cells = l => l.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, "|"));
+  const isSep = l => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l) && l.includes("-");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    let m;
+    if ((m = raw.match(/^(\s*)(`{3,}|~{3,})\s*([\w+#.-]*)/))) {   // fenced code (inside a list too)
+      endPara(); if (!m[1].length) endLists();
+      const fence = m[2], body = [];
+      while (++i < lines.length && !lines[i].trim().startsWith(fence)) body.push(lines[i].slice(Math.min(m[1].length, lines[i].search(/\S|$/))));
+      out.push(`<pre${m[3] ? ` data-lang="${escHtml(m[3])}"` : ""}><code>` + escHtml(body.join("\n")) + "</code></pre>");
       continue;
     }
-    if (/^\s*```/.test(raw)) { endPara(); endList(); fence = ""; continue; }
-    let m;
-    if ((m = raw.match(/^(#{1,4})\s+(.*)/))) { endPara(); endList(); out.push("<h" + m[1].length + ">" + mdInline(m[2]) + "</h" + m[1].length + ">"); continue; }
-    if ((m = raw.match(/^\s*([-*]|\d+\.)\s+(.*)/))) {
-      endPara(); const t = /\d/.test(m[1]) ? "ol" : "ul";
-      if (list !== t) { endList(); out.push("<" + t + ">"); list = t; }
-      out.push("<li>" + mdInline(m[2]) + "</li>"); continue;
+    if (!raw.trim()) { endPara(); if (lists.length && !/^\s+\S|^\s*([-*+]|\d+[.)])\s/.test(lines[i + 1] || "")) endLists(); continue; }
+    if ((m = raw.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/))) { endPara(); endLists(); out.push(`<h${m[1].length}>${mdInline(m[2])}</h${m[1].length}>`); continue; }
+    if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(raw)) { endPara(); endLists(); out.push("<hr>"); continue; }
+    if (raw.includes("|") && isSep(lines[i + 1] || "")) {   // table: header, separator, rows
+      endPara(); endLists();
+      const head = cells(raw), al = cells(lines[i + 1]).map(c => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
+      const td = (tag, cs) => "<tr>" + head.map((_, k) => `<${tag}${al[k] ? ` style="text-align:${al[k]}"` : ""}>${mdInline(cs[k] ?? "")}</${tag}>`).join("") + "</tr>";
+      const rows = [];
+      for (i += 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) rows.push(td("td", cells(lines[i])));
+      i--;
+      out.push('<div class="tbl"><table><thead>' + td("th", head) + "</thead><tbody>" + rows.join("") + "</tbody></table></div>");
+      continue;
     }
-    if (!raw.trim()) { endPara(); endList(); continue; }
-    endList(); para.push(raw);
+    if (/^\s{0,3}>/.test(raw)) {   // blockquote: its own markdown
+      endPara(); endLists();
+      const q = [];
+      for (; i < lines.length && /^\s{0,3}>/.test(lines[i]); i++) q.push(lines[i].replace(/^\s{0,3}>\s?/, ""));
+      i--;
+      out.push("<blockquote>" + mdToHtml(q.join("\n")) + "</blockquote>");
+      continue;
+    }
+    if ((m = raw.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)/))) {   // list item, nested by indentation
+      endPara();
+      const ind = m[1].replace(/\t/g, "    ").length, tag = /\d/.test(m[2]) ? "ol" : "ul";
+      while (lists.length && ind < lists[lists.length - 1].indent) out.push("</li></" + lists.pop().tag + ">");
+      const top = lists[lists.length - 1];
+      if (!top || ind > top.indent) {
+        const start = tag === "ol" && parseInt(m[2]) !== 1 ? ` start="${parseInt(m[2])}"` : "";
+        out.push(`<${tag}${start}>`); lists.push({ tag, indent: ind });
+      } else if (top.tag !== tag) { out.push("</li></" + lists.pop().tag + `><${tag}>`); lists.push({ tag, indent: ind }); }
+      else out.push("</li>");
+      let text = m[3], box = "";
+      if ((m = text.match(/^\[([ xX])\]\s+(.*)/))) { box = m[1] === " " ? '<span class="tk">☐</span> ' : '<span class="tk done">☑</span> '; text = m[2]; }
+      out.push("<li>" + box + mdInline(text));
+      continue;
+    }
+    if (lists.length && /^\s+\S/.test(raw)) { out.push("<br>" + mdInline(raw.trim())); continue; }   // continuation of an item
+    endLists();
+    para.push(raw);
   }
-  if (fence !== null) out.push("<pre><code>" + escHtml(fence) + "</code></pre>");
-  endPara(); endList();
+  endPara(); endLists();
   return out.join("");
 }
 
@@ -1042,11 +1140,23 @@ function line(cls, bullet, text, ts) {
   b.onclick = () => { if (selBubble) selBubble.classList.remove("sel"); selBubble = selBubble === b ? null : b; if (selBubble) b.classList.add("sel"); updateHint(); };
   return b;
 }
+function mdLine(text, ts) {   // an agent's text block: "●" + rendered markdown, still selectable for forwarding
+  const b = line("mdln", "●", "", ts);
+  b.lastChild.remove();
+  const d = el("div", "md"); d.innerHTML = mdToHtml(text); b.append(d);
+  b.dataset.text = text;
+  d.addEventListener("click", ev => { if (ev.target.closest("a")) ev.stopPropagation(); });
+  return b;
+}
 function bump(e, a) {
   if (!e.ts) return;
   const t = tsMs(e.ts), k = ck(), cur = acts[k];
   if (cur && t < cur.upd) return;
   acts[k] = { ...a, upd: t, t0: a.keepT0 && cur && (cur.kind === "thinking" || cur.kind === "writing") ? cur.t0 : t };
+}
+function closeOpenTools() {   // calls that never got a result stop pulsing
+  for (const b of [...Object.values(openTools), ...toolQueue]) b.firstChild.classList.remove("open");
+  openTools = {}; toolQueue = [];
 }
 function render(e) {
   switch (e.kind) {
@@ -1058,8 +1168,17 @@ function render(e) {
     }
     case "text":
       if (curRun()?.oneshot) { const d = el("div", "md"); d.innerHTML = mdToHtml(e.text); add(d); break; }
-      add(line("", "●", e.text, e.ts)); bump(e, { kind: "thinking", text: "", tokens: acts[ck()]?.tokens, keepT0: true }); break;
-    case "user": add(line("user", ">", e.text, e.ts)); bump(e, { kind: "user", text: e.text }); break;
+      add(mdLine(e.text, e.ts)); bump(e, { kind: "thinking", text: "", tokens: acts[ck()]?.tokens, keepT0: true }); break;
+    case "user": {
+      if (curRun()?.plan) closeOpenTools();   // a new prompt: calls still open were interrupted
+      const fl = (e.files || []).length ? "  [files: " + e.files.join(", ") + "]" : "";
+      add(line("user", ">", (e.text || "") + fl, e.ts)); bump(e, { kind: "user", text: e.text }); break;
+    }
+    case "question": {
+      const r = curRun(), card = questionForm(r && r.project, r && r.name, e.id, e.questions || []);
+      qCards[e.id] = card; add(card); break;
+    }
+    case "answer": { const c = qCards[e.id]; if (c) markAnswered(c, e); break; }
     case "thinking": {
       const d = el("details", "think");
       d.append(el("summary", "", "✻ Thinking…"), el("div", "", e.text));
@@ -1099,7 +1218,7 @@ function render(e) {
     case "rate_limit": add(el("div", "sys", `rate limit ${e.status}${e.type ? " (" + e.type + ")" : ""}`)); break;
     case "start": add(el("div", "sys", e.oneshot ? `one-shot · ${(e.model || "").replace("claude-", "")} · effort ${e.effort || "?"}`
       : `started · ${(e.model || "").replace("claude-", "")} · budget ${usd(e.budget)} · ${e.brief || ""}`)); break;
-    case "result": add(el("div", "sys", `turn done · ${usd(e.cost)} · ${e.turns} turns · ${e.subtype}`)); loadRuns(); break;
+    case "result": closeOpenTools(); add(el("div", "sys", `turn done · ${usd(e.cost)} · ${e.turns} turns · ${e.subtype}`)); loadRuns(); break;
     case "end": add(el("div", "sys", e.killed ? "run stopped (killed)" : "run ended")); loadRuns(); break;
   }
 }
@@ -1192,6 +1311,100 @@ function drawLocalStatic(r) {
   }
 }
 
+// ---- questions (AskUserQuestion in API runs, answered here) ----
+let qCards = {};
+const qSeen = new Set(LS.get("qseen") || []);
+function rememberQ(id) { qSeen.add(id); LS.set("qseen", [...qSeen].slice(-200)); }
+function questionForm(project, run, qid, questions, onDone) {
+  const card = el("div", "qcard"), pick = [];
+  card.append(el("div", "sys", "? the agent asks" + (questions.length > 1 ? ` (${questions.length} questions)` : "")));
+  for (const q of questions) {
+    const multi = !!q.multiSelect, grp = "q" + Math.random().toString(36).slice(2);
+    if (q.header) card.append(el("div", "qh", q.header));
+    card.append(el("div", "qq", q.question || ""));
+    const inputs = [];
+    for (const o of q.options || []) {
+      const row = el("label", "qo"), inp = el("input");
+      inp.type = multi ? "checkbox" : "radio"; inp.name = grp; inp.value = o.label;
+      const t = el("div"); t.append(el("span", "", o.label)); if (o.description) t.append(el("small", "", o.description));
+      row.append(inp, t); card.append(row); inputs.push(inp);
+    }
+    const other = el("input"); other.type = "text"; other.placeholder = "Other (type your own answer)";
+    other.oninput = () => { if (other.value && !multi) inputs.forEach(i => i.checked = false); };
+    inputs.forEach(i => i.onchange = () => { if (!multi && i.checked) other.value = ""; });
+    card.append(other);
+    pick.push(() => {
+      const chosen = inputs.filter(i => i.checked).map(i => i.value);
+      if (other.value.trim()) chosen.push(other.value.trim());
+      return [q.question || "", chosen.join(", ")];
+    });
+  }
+  const bx = el("div", "actions"), ok = el("button", "primary sm need-operate", "Answer"), st = el("span", "hint");
+  ok.onclick = async () => {
+    const pairs = pick.map(f => f());
+    if (pairs.some(([, a]) => !a)) { st.textContent = "Answer every question."; return; }
+    ok.disabled = true;
+    const res = await post("/api/inbox", { p: project, run }, { answer: qid, answers: Object.fromEntries(pairs) });
+    if (res.ok === false) { ok.disabled = false; st.textContent = "Failed: " + (res.error || "?"); return; }
+    st.textContent = "Sent: the agent continues within a second or two.";
+    rememberQ(qid);
+    if (onDone) onDone();
+    loadRuns(); loadAttention();
+  };
+  bx.append(ok, st); card.append(bx);
+  return card;
+}
+function markAnswered(card, e) {
+  if (card.classList.contains("done")) return;
+  card.classList.add("done");
+  card.querySelectorAll("input,button").forEach(x => x.disabled = true);
+  const a = e.cancelled ? "(not answered: stopped or timed out)" : Object.values(e.answers || {}).map(v => "→ " + v).join("\n");
+  card.append(el("div", "qa", a));
+  rememberQ(e.id);
+}
+function popQuestions() {   // a new question from any run pops up once, like Claude's own question prompt
+  const dlg = $("#qdlg");
+  if (dlg.open) return;
+  const a = attention.find(x => x.kind === "question" && x.action && x.action.id && !qSeen.has(x.action.id));
+  if (!a) return;
+  const body = $("#qdlg-body"); body.textContent = "";
+  const run = allRuns.find(r => r.project === a.project && r.name === a.run);
+  const head = el("div"); head.append(el("b", "", run?.title || a.run), " · " + (a.project_name || run?.project_name || projects.find(p => p.key === a.project)?.name || ""));
+  const close = () => { rememberQ(a.action.id); dlg.close(); setTimeout(popQuestions, 300); };
+  const form = questionForm(a.project, a.run, a.action.id, a.action.questions || [], close);
+  const open = el("button", "sm", "Open run"); open.onclick = () => { close(); select(a.project, a.run); };
+  const later = el("button", "sm", "Later"); later.title = "stays in the attention list"; later.onclick = close;
+  form.querySelector(".actions").append(open, later);
+  body.append(head, form);
+  dlg.showModal();
+}
+
+// ---- attachments ----
+let pending = [];   // [{name, size, data(base64)}]
+function drawFiles() {
+  const b = $("#files"); b.textContent = "";
+  pending.forEach((f, i) => {
+    const c = el("span", "chip", f.name + " (" + (f.size < 1024 ? f.size + " B" : Math.round(f.size / 1024) + " KB") + ") ");
+    const x = el("button", "sm", "×"); x.title = "remove"; x.onclick = () => { pending.splice(i, 1); drawFiles(); };
+    c.append(x); b.append(c);
+  });
+}
+function addFiles(list) {
+  for (const f of list) {
+    if (pending.length >= 10) { $("#hint").textContent = "At most 10 files."; break; }
+    if (pending.reduce((n, p) => n + p.size, 0) + f.size > 20 * 1024 * 1024) { $("#hint").textContent = "Attachments over 20 MB."; break; }
+    const rd = new FileReader();
+    rd.onload = () => { pending.push({ name: f.name || "pasted.png", size: f.size, data: String(rd.result).split(",")[1] || "" }); drawFiles(); };
+    rd.readAsDataURL(f);
+  }
+}
+$("#attach").onclick = () => $("#fileinp").click();
+$("#fileinp").onchange = ev => { addFiles(ev.target.files); ev.target.value = ""; };
+$("#text").addEventListener("paste", ev => { const fs = [...(ev.clipboardData?.files || [])]; if (fs.length) { ev.preventDefault(); addFiles(fs); } });
+$("#composer").addEventListener("dragover", ev => { ev.preventDefault(); $("#composer").classList.add("drop"); });
+$("#composer").addEventListener("dragleave", () => $("#composer").classList.remove("drop"));
+$("#composer").addEventListener("drop", ev => { ev.preventDefault(); $("#composer").classList.remove("drop"); if (!$("#attach").disabled) addFiles(ev.dataTransfer.files); });
+
 // ---- composer ----
 const msgText = () => $("#text").value.trim();
 function updateHint() { $("#hint").textContent = selBubble && !msgText() ? "Forward uses the selected line." : ""; }
@@ -1199,16 +1412,17 @@ $("#text").oninput = updateHint;
 let armTimer = null;
 $("#send").onclick = async () => {
   const b = $("#send"), t = msgText();
-  if (!current || !t) return;
+  if (!current || (!t && !pending.length)) return;
   if (!b.classList.contains("armed")) {
     b.classList.add("armed"); b.textContent = "Confirm send";
     $("#hint").textContent = "Delivered at the agent's next turn. Click again to send.";
     armTimer = setTimeout(disarm, 5000); return;
   }
   disarm();
-  const r = await post("/api/inbox", { p: current.project, run: current.name }, { text: t });
-  $("#hint").textContent = r.ok ? "Queued: delivered at next turn." : "Failed: " + r.error;
-  if (r.ok) $("#text").value = "";
+  const files = pending.map(f => ({ name: f.name, data: f.data }));
+  const r = await post("/api/inbox", { p: current.project, run: current.name }, files.length ? { text: t, files } : { text: t });
+  $("#hint").textContent = r.ok ? "Queued: delivered at next turn" + (files.length ? ` with ${files.length} file(s).` : ".") : "Failed: " + r.error;
+  if (r.ok) { $("#text").value = ""; pending = []; drawFiles(); }
 };
 function disarm() { clearTimeout(armTimer); const b = $("#send"); b.classList.remove("armed"); b.textContent = "Send to agent"; }
 $("#stop").onclick = async () => {
@@ -1559,6 +1773,22 @@ setTab("agents");
   const v = filterRuns(runs).filter(r => !r.parent)[0];
   if (v && !current) select(v.project, v.name, true);
 })();
+// ---- live update: the server's source changed -> reload this page (it keeps the selected run) ----
+let build = null, reloadDue = false;
+async function checkBuild() {
+  const h = await jget("/api/health");
+  if (!h || !h.build) return;
+  if (build === null) build = h.build;
+  else if (h.build !== build) reloadDue = true;
+  if (!reloadDue) return;
+  const busy = msgText() || pending.length || document.querySelector("dialog[open]");
+  if (busy) { $("#hint").textContent = "The dashboard was updated: it reloads once this message is sent or cleared."; return; }
+  try { sessionStorage.setItem("ac.reselect", JSON.stringify(current)); } catch {}
+  location.reload();
+}
+try { const r = JSON.parse(sessionStorage.getItem("ac.reselect") || "null"); sessionStorage.removeItem("ac.reselect");
+  if (r && r.name) setTimeout(() => select(r.project, r.name, true), 600); } catch {}
+setInterval(checkBuild, 10000); checkBuild();
 setInterval(loadRuns, 4000); setInterval(loadSpend, 8000); setInterval(loadProjects, 8000);
 setInterval(loadAttention, 8000); setInterval(loadLms, 20000); setInterval(loadCfg, 60000);
 </script>

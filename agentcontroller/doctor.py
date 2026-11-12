@@ -251,13 +251,29 @@ def check_skills(claude_dir: Path | None = None, claude_json: Path | None = None
     return out
 
 
+def _roadmap_status() -> dict:
+    from . import roadmap_tool
+    return roadmap_tool.status()
+
+
 def check_roadmap() -> Check:
+    """Present, working and at WebRoadmap main (it tracks main; agentdash and install.py upgrade it)."""
     p = _which("roadmap")
-    if p:
-        return Check("roadmap", "roadmap CLI (WebRoadmap)", "required", "ok", _version(p) or p)
-    return Check("roadmap", "roadmap CLI (WebRoadmap)", "required", "missing",
-                 "not on PATH: the dashboard's Roadmap tab and project roadmaps need it",
-                 "`uv run install.py` (installs it at a pinned commit)")
+    fix = "close agentdash, then `uv run install.py` (or `uv tool install --force git+https://github.com/Fwogg3r/WebRoadmap`)"
+    if not p:
+        return Check("roadmap", "roadmap CLI (WebRoadmap)", "required", "missing",
+                     "not on PATH: the dashboard's Roadmap tab and project roadmaps need it",
+                     "`uv run install.py` (installs it at WebRoadmap main)")
+    st = _roadmap_status()
+    inst, latest = (st.get("installed") or "?")[:7], (st.get("latest") or "?")[:7]
+    if not st.get("works"):
+        return Check("roadmap", "roadmap CLI (WebRoadmap)", "required", "missing",
+                     f"installed ({inst}) but broken: `roadmap --help` fails (a half-done upgrade?)", fix)
+    if st.get("current") is False:
+        return Check("roadmap", "roadmap CLI (WebRoadmap)", "required", "warn",
+                     f"behind WebRoadmap main: installed {inst}, main {latest}", fix)
+    return Check("roadmap", "roadmap CLI (WebRoadmap)", "required", "ok",
+                 f"{inst}, " + ("WebRoadmap main" if st.get("current") else "main not reachable to compare"))
 
 
 def check_aider() -> Check:

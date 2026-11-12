@@ -30,6 +30,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "_dash_up", lambda port: False)
     monkeypatch.setattr(doctor, "_tool_bin_dir", lambda: None)
     monkeypatch.setattr(doctor, "_port_open", lambda *a: pytest.fail("a real socket was opened"))
+    monkeypatch.setattr(doctor, "_roadmap_status",
+                        lambda: {"installed": "a" * 40, "latest": "a" * 40, "current": True, "works": True})
     return tmp_path
 
 
@@ -282,3 +284,18 @@ def test_module_runs_as_script():
     r = subprocess.run([sys.executable, "-m", "agentcontroller.doctor", "--help"], capture_output=True, text=True,
                        cwd=Path(__file__).resolve().parents[1])
     assert r.returncode == 0 and "--scan" in r.stdout
+
+
+def test_roadmap_behind_main_or_broken(env, monkeypatch):
+    monkeypatch.setattr(doctor, "_which", lambda exe: f"/bin/{exe}")
+    monkeypatch.setattr(doctor, "_roadmap_status",
+                        lambda: {"installed": "a" * 40, "latest": "b" * 40, "current": False, "works": True})
+    c = doctor.check_roadmap()
+    assert c.status == "warn" and "aaaaaaa" in c.detail and "bbbbbbb" in c.detail and "install.py" in c.hint
+    monkeypatch.setattr(doctor, "_roadmap_status",
+                        lambda: {"installed": "a" * 40, "latest": None, "current": None, "works": False})
+    assert doctor.check_roadmap().status == "missing"
+    monkeypatch.setattr(doctor, "_roadmap_status",
+                        lambda: {"installed": "a" * 40, "latest": None, "current": None, "works": True})
+    c = doctor.check_roadmap()
+    assert c.status == "ok" and "not reachable" in c.detail

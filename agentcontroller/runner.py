@@ -28,6 +28,10 @@ IDLE_GRACE = 2.0  # seconds to wait after the last result for an inbox message b
 # After the last background task ends, the CLI starts a turn on its notification. Wait this long for
 # that turn's result; if the notification was absorbed by a turn already running, none comes.
 FOLLOWUP_GRACE = 120.0
+QUESTION_TIMEOUT = 4 * 3600.0  # an unanswered AskUserQuestion is denied after this long
+INLINE_TEXT_MAX = 200_000  # attached text files up to this size are inlined into the message
+INLINE_BIN_MAX = 5 << 20  # images / PDFs up to this size are sent as content blocks
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 PROGRESS_EVERY = 2.0  # seconds between `progress` events; stream deltas arrive many times a second
 
 # Static allow-patterns proved unreliable headless, so every tool call goes through `approve`:
@@ -50,10 +54,63 @@ def denied(cmd: str, patterns: list[str]) -> str | None:
     return next((p for p in patterns if re.search(p, cmd, re.IGNORECASE)), None)
 
 
-def make_approver(worktree: Path, patterns: list[str]):
+def read_inbox(inbox: Path, start: int = 0) -> tuple[list[dict], int]:
+    """Parsed inbox lines from line `start` on, and the new line count."""
+    if not inbox.exists():
+        return [], start
+    lines = inbox.read_text(encoding="utf-8").splitlines()
+    out = []
+    for l in lines[start:]:
+        try:
+            obj = json.loads(l)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out, len(lines)
+
+
+class Asker:
+    """AskUserQuestion, answered from the dashboard.
+
+    The question is written as a `question` event; the dashboard appends {"answer": <id>, "answers": {...}}
+    to the inbox. The answers go back to the tool as `updated_input["answers"]` ({question text: label, labels
+    joined with ", " for multi-select, or free text}). A stop request, or no answer within QUESTION_TIMEOUT,
+    denies the call so the model carries on with its own judgment.
+    """
+
+    def __init__(self, inbox: Path, events: "EventLog", timeout: float | None = None):
+        self.inbox, self.events = inbox, events
+        self.timeout = QUESTION_TIMEOUT if timeout is None else timeout
+        self.n = 0
+
+    async def ask(self, inp: dict) -> "PermissionResultAllow | PermissionResultDeny":
+        self.n += 1
+        qid = f"q{int(time.time())}-{self.n}"
+        _, seen = read_inbox(self.inbox)
+        self.events.write("question", id=qid, questions=inp.get("questions") or [])
+        deadline = time.time() + self.timeout
+        while time.time() < deadline:
+            await asyncio.sleep(1.0)
+            items, seen = read_inbox(self.inbox, seen)
+            for it in items:
+                if it.get("control") == "stop":
+                    self.events.write("answer", id=qid, cancelled=True)
+                    return PermissionResultDeny(message="The owner stopped the run instead of answering.")
+                if it.get("answer") == qid and isinstance(it.get("answers"), dict):
+                    answers = {str(k): str(v) for k, v in it["answers"].items()}
+                    self.events.write("answer", id=qid, answers=answers)
+                    return PermissionResultAllow(updated_input={**inp, "answers": answers})
+        self.events.write("answer", id=qid, cancelled=True)
+        return PermissionResultDeny(message="No answer from the owner in time; use your best judgment and say what you chose.")
+
+
+def make_approver(worktree: Path, patterns: list[str], asker: "Asker | None" = None):
     root = worktree.resolve()
 
     async def approve(tool: str, inp: dict, _ctx) -> "PermissionResultAllow | PermissionResultDeny":
+        if tool == "AskUserQuestion" and asker is not None:
+            return await asker.ask(inp)
         if tool == "Bash" and (pat := denied(inp.get("command", ""), patterns)):
             return PermissionResultDeny(message=f"blocked by runner policy ({pat})")
         if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
@@ -208,8 +265,45 @@ class CostMeter:
             self.events.write("cost", usd=round(self.base_usd + usd, 4), turns=self.base_turns + self.calls)
 
 
-def user_msg(text: str) -> dict:
-    return {"type": "user", "message": {"role": "user", "content": text}, "parent_tool_use_id": None}
+def user_msg(text: str, files: list[dict] | None = None) -> dict:
+    content = text if not files else attachment_blocks(text, files)
+    return {"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": None}
+
+
+def attachment_blocks(text: str, files: list[dict]) -> list[dict]:
+    """Message text + attached files: images and PDFs as content blocks, small text files inlined,
+    anything else (or too big) referenced by its saved path so the agent can Read it."""
+    import base64
+    blocks: list[dict] = [{"type": "text", "text": text or "(see the attached files)"}]
+    for f in files:
+        path = Path(str(f.get("path") or ""))
+        name = str(f.get("name") or path.name)
+        try:
+            data = path.read_bytes()
+        except OSError:
+            blocks.append({"type": "text", "text": f"[attachment {name} could not be read]"})
+            continue
+        ext = path.suffix.lower()
+        if ext in IMAGE_TYPES and len(data) <= INLINE_BIN_MAX:
+            blocks.append({"type": "text", "text": f"[attached image: {name}]"})
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": IMAGE_TYPES[ext],
+                                                        "data": base64.b64encode(data).decode()}})
+            continue
+        if ext == ".pdf" and len(data) <= INLINE_BIN_MAX:
+            blocks.append({"type": "text", "text": f"[attached PDF: {name}]"})
+            blocks.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                                           "data": base64.b64encode(data).decode()}})
+            continue
+        if len(data) <= INLINE_TEXT_MAX and b"\0" not in data[:8192]:
+            try:
+                body = data.decode("utf-8")
+            except UnicodeDecodeError:
+                body = None
+            if body is not None:
+                blocks.append({"type": "text", "text": f'<attached_file name="{name}" saved_at="{path}">\n{body}\n</attached_file>'})
+                continue
+        blocks.append({"type": "text", "text": f"[attached file {name}: {len(data)} bytes, saved at {path}; Read it if you need it]"})
+    return blocks
 
 
 class Session:
@@ -276,11 +370,13 @@ class Session:
             for item in self._new_lines():
                 if item.get("control") == "stop":
                     self.stop = True
-                elif item.get("text") and not self.stop:
+                elif (item.get("text") or item.get("files")) and not self.stop:
                     self.pending += 1
                     self.idle_since = None
-                    self.events.write("user", text=item["text"])
-                    yield user_msg(item["text"])
+                    files = [f for f in item.get("files") or [] if isinstance(f, dict)]
+                    extra = {"files": [f.get("name") for f in files]} if files else {}
+                    self.events.write("user", text=item.get("text") or "", **extra)
+                    yield user_msg(item.get("text") or "", files)
             if self.stop and self.pending <= 0:
                 return
             if self.followup_by is not None and time.time() >= self.followup_by:
@@ -431,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         max_budget_usd=args.budget,
         permission_mode="default",  # every non-read tool call reaches `approve`
         allowed_tools=["Read", "Glob", "Grep", "TodoWrite"],
-        can_use_tool=make_approver(wt, patterns),
+        can_use_tool=make_approver(wt, patterns, Asker(cfg.runs / f"{args.name}.inbox.jsonl", events)),
         system_prompt={"type": "preset", "preset": "claude_code",
                        "append": cfg.rules + "\n\n" + ECONOMY_RULES.format(soft=max(10, max_turns - 10), name=args.name)},
         setting_sources=["project"],  # loads the worktree's CLAUDE.md

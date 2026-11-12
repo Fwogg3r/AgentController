@@ -24,8 +24,8 @@ def test_fresh_home_plan(tmp_path):
     assert r.returncode == 0, r.stderr
     out = r.stdout
     assert "uv tool install --force --editable" in out
-    # the roadmap CLI is either planned at its pinned commit or already on this machine
-    assert "Fwogg3r/WebRoadmap@" in out or "the roadmap CLI is already installed" in out
+    # the roadmap CLI is always planned at WebRoadmap main (installed when missing, upgraded when behind)
+    assert "Fwogg3r/WebRoadmap@<main>" in out
     assert "agentdoctor" in out
     assert "@ feb9ff9 (pinned)" in out                      # batchy: planned, not cloned
     assert not (home / ".claude").exists() and not (home / ".agentcontroller").exists()   # a dry run writes nothing
@@ -46,8 +46,9 @@ def test_local_flag_plans_pinned_aider(tmp_path):
 
 def test_pins_are_full_commits():
     src = (REPO / "install.py").read_text(encoding="utf-8")
-    for name in ("ROADMAP_SPEC", "AIDER_SPEC"):
-        assert re.search(rf'{name} = "[^"]+@[0-9a-f]{{40}}"', src), name
+    assert re.search(r'AIDER_SPEC = "[^"]+@[0-9a-f]{40}"', src)
+    # WebRoadmap is the owner's own single-source tool: it tracks main, never a pin
+    assert 'ROADMAP_SPEC = "git+https://github.com/Fwogg3r/WebRoadmap"' in src
 
 
 def test_yes_does_not_install_aider_and_init_registers_project(tmp_path):

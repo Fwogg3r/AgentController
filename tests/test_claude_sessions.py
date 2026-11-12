@@ -144,6 +144,33 @@ class T(unittest.TestCase):
         write(self.main, [user("<task-notification>x</task-notification>")])
         self.assertEqual(cs.list_runs(self.d)[0]["state"], "working")
 
+    def test_background_task_is_waiting(self):
+        done = asst("m1", [{"type": "text", "text": "Waiting for the bench."}])
+        done["message"]["stop_reason"] = "end_turn"
+        bash = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cargo bench", "run_in_background": True}}
+        agent = {"type": "tool_use", "id": "t2", "name": "Agent", "input": {"description": "Review it"}}
+        res = lambda tid, text: {"type": "tool_result", "tool_use_id": tid, "content": text}
+        write(self.main, [user("go"), asst("m0", [bash, agent]),
+                          user([res("t1", "Command running in background with ID: bx1. Output is being written to: x"),
+                                res("t2", [{"type": "text", "text": "Async agent launched successfully.\nagentId: a77 (internal)"}])]),
+                          done])
+        r = cs.list_runs(self.d, now=time.time() + 3600)[0]       # an hour later, still waiting on both
+        self.assertEqual((r["state"], r["active"], r["bg_tasks"]), ("waiting", True, 2))
+        self.assertEqual(r["activity"]["kind"], "task")
+        self.assertIn("Bash: cargo bench", r["activity"]["text"])
+        note = lambda tid, st: user(f"<task-notification>\n<task-id>{tid}</task-id>\n<status>{st}</status>\n</task-notification>", isMeta=True)
+        done2 = asst("m2", [{"type": "text", "text": "ok"}])
+        done2["message"]["stop_reason"] = "end_turn"
+        write(self.main, [note("bx1", "completed"), done2, note("a77", "failed"), done2])
+        r = cs.list_runs(self.d, now=time.time() + 3600)[0]
+        self.assertEqual((r["state"], r["bg_tasks"]), ("finished", 0))
+
+    def test_question_is_waiting(self):
+        ask = {"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Ship?"}]}}
+        write(self.main, [user("go"), asst("m0", [ask])])
+        r = cs.list_runs(self.d, now=time.time() + 3 * 3600)[0]   # past PENDING_IDLE, still waiting on the owner
+        self.assertEqual((r["state"], r["activity"]["kind"]), ("waiting", "question"))
+
     def test_project_dir(self):
         root = Path("C:/Users/X/Doc/My_Proj")
         (self.d / "c--Users-X-Doc-My-Proj").mkdir()

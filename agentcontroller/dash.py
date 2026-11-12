@@ -38,7 +38,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import access as acc_mod
-from . import NO_WINDOW, claude_sessions, hub, registry
+from . import NO_WINDOW, claude_sessions, hub, registry, roadmap_tool
 from .config import CONFIG_NAME, Config, load
 
 PAGE = Path(__file__).resolve().parent / "static" / "index.html"
@@ -111,6 +111,9 @@ def git(wt: str | Path, *args: str, timeout: int = 20) -> tuple[int, str]:
 
 
 # ---------- processes ----------
+STREAM_CHUNK = 4 << 20  # bytes per read when tailing; a backlog is read back to back, not one chunk per poll
+
+
 def pid_file(name: str) -> Path:
     return CFG.runs / f"{name}.pid"
 
@@ -188,7 +191,8 @@ def event_state(events: list[dict]) -> dict:
     Older event files have no tool ids; their tools pair with results in order.
     """
     fresh = lambda: {"tools": {}, "tasks": {}, "result": None, "ended": False, "killed": False, "progress": None,
-                     "last": None, "retry": None, "rate_limit": None, "pending_user": 0, "task_closed_at": None}
+                     "last": None, "retry": None, "rate_limit": None, "pending_user": 0, "task_closed_at": None,
+                     "question": None}
     st, anon = fresh(), 0
     for e in events:
         k = e.get("kind")
@@ -215,6 +219,10 @@ def event_state(events: list[dict]) -> dict:
             st["pending_user"] += 1
         elif k == "end":
             st["ended"], st["killed"] = True, bool(e.get("killed"))
+        elif k == "question":
+            st["question"] = e
+        elif k == "answer" and st["question"] and e.get("id") == st["question"].get("id"):
+            st["question"] = None
         if k == "progress":
             st["progress"] = e
         elif k == "retry":
@@ -279,6 +287,12 @@ def derive_state(name: str, events: list[dict], alive: bool, has_pid: bool, idle
         r = st["retry"]
         return out("waiting", "running", kind="retry", since=r.get("ts"), delay_ms=r.get("delay_ms"),
                    text=f"API retry {r.get('attempt')}/{r.get('max_retries')}: {r.get('error') or r.get('error_status')}")
+    if st["question"]:  # AskUserQuestion: the run waits for an answer from the dashboard
+        q = st["question"]
+        qs = q.get("questions") or []
+        first = qs[0].get("question") if qs and isinstance(qs[0], dict) else ""
+        return out("waiting", "running", kind="question", text=f"question: {first}"[:220], since=q.get("ts"),
+                   qid=q.get("id"), questions=qs)
     if st["tools"]:
         tools = list(st["tools"].values())
         t = tools[0]
@@ -464,6 +478,38 @@ def launch(body: dict) -> tuple[int, dict]:
                              close_fds=True, **kw)
     pid_file(name).write_text(str(p.pid))
     return 200, {"ok": True, "pid": p.pid, "brief": str(brief)}
+
+
+ATTACH_MAX = 20 << 20  # total bytes of files per message
+ATTACH_FILES = 10
+
+
+def save_attachments(name: str, files) -> tuple[list[dict], str | None]:
+    """Files sent with a message ([{name, data: base64}]) -> agent_runs/attachments/<run>/; the runner inlines or links them."""
+    if not files:
+        return [], None
+    if not isinstance(files, list) or len(files) > ATTACH_FILES:
+        return [], f"at most {ATTACH_FILES} files"
+    import base64
+    out, total = [], 0
+    d = CFG.runs / "attachments" / name
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for i, f in enumerate(files):
+        if not isinstance(f, dict) or not isinstance(f.get("data"), str):
+            return [], "bad file entry"
+        try:
+            data = base64.b64decode(f["data"], validate=True)
+        except ValueError:
+            return [], "bad base64"
+        total += len(data)
+        if total > ATTACH_MAX:
+            return [], f"attachments over {ATTACH_MAX >> 20} MB"
+        fname = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(str(f.get("name") or "file")).name).strip("._")[:80] or "file"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{stamp}-{i}-{fname}"
+        path.write_bytes(data)
+        out.append({"name": fname, "path": str(path), "bytes": len(data)})
+    return out, None
 
 
 def stop_graceful(name: str) -> tuple[int, dict]:
@@ -758,9 +804,14 @@ def attention() -> list[dict]:
             for a in r.get("approvals") or []:
                 out.append({**base, "kind": "approval", "text": f"approve? {a.get('summary') or a.get('id') or ''}"[:200],
                             "action": {"type": "local_approve", "run": r["name"], "id": a.get("id")}})
+            act = r.get("activity") or {}
+            if r.get("state") == "waiting" and act.get("kind") == "question":
+                out.append({**base, "kind": "question", "text": f"{r.get('title') or r['name']} asks: {act.get('text', '')[10:]}"[:200],
+                            "action": {"type": "question", "run": r["name"], "id": act.get("qid"),
+                                       "questions": act.get("questions") or []}})
             if r.get("state") == "crashed" and (r.get("idle_seconds") or 0) < 86400:
                 out.append({**base, "kind": "crashed", "text": f"{r.get('title') or r['name']} crashed"[:200]})
-            elif r.get("plan") and r.get("state") == "waiting" and not r.get("own_state"):  # not a parent waiting on its children
+            elif r.get("plan") and r.get("state") == "waiting" and not r.get("own_state") and act.get("kind") != "task":  # not a parent waiting on its children
                 out.append({**base, "kind": "waiting", "text": f"{r.get('title') or r['name']} is waiting"[:200]})
     pm = hub.pmjc()
     for a in pm.get("approvals") or []:
@@ -841,9 +892,10 @@ def rm_server(key: str) -> tuple[int | None, str | None]:
             return None, "the `roadmap` CLI isn't installed: uv tool install git+https://github.com/Fwogg3r/WebRoadmap"
         port = _free_port()
         try:
-            proc = subprocess.Popen([exe, "--dir", str(rdir), "serve", "--host", "127.0.0.1", "--port", str(port)],
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    **NO_WINDOW)
+            with roadmap_tool.LOCK:  # not while an upgrade is replacing the tool
+                proc = subprocess.Popen([exe, "--dir", str(rdir), "serve", "--host", "127.0.0.1", "--port", str(port)],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        **NO_WINDOW)
         except OSError as e:
             return None, f"roadmap serve failed: {e}"
         for _ in range(50):
@@ -857,11 +909,49 @@ def rm_server(key: str) -> tuple[int | None, str | None]:
         return None, "roadmap serve did not start within 5 s"
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """On Windows `roadmap.exe` is a launcher with python children that keep the tool dir locked; kill them too."""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=15, **NO_WINDOW)
+        else:
+            proc.kill()
+        proc.wait(timeout=10)
+
+
 def rm_stop_all() -> None:
     for proc, _ in list(_rm_servers.values()):
-        with contextlib.suppress(OSError):
-            proc.kill()
+        _kill_tree(proc)
     _rm_servers.clear()
+
+
+# ---------- keep the roadmap CLI at WebRoadmap main (roadmap_tool.py) ----------
+RM_CHECK_EVERY = 600  # s between GitHub checks on Roadmap page loads
+_rm_checked = 0.0
+RM_TOOL: dict = {}  # the last check's result (also logged to dash.log)
+
+
+def rm_refresh(force: bool = False) -> dict:
+    """Upgrade the roadmap CLI when WebRoadmap main has moved: at startup, and on a Roadmap page load at most every
+    RM_CHECK_EVERY s. Our own `roadmap serve`s are stopped first (they lock the tool on Windows) and respawn on the
+    next request; a `roadmap` run by anything else makes it skip and try again on a later load."""
+    global _rm_checked, RM_TOOL
+    if not force and time.time() - _rm_checked < RM_CHECK_EVERY:
+        return RM_TOOL
+    _rm_checked = time.time()
+    latest = roadmap_tool.latest_commit()
+    if latest and latest == roadmap_tool.installed_commit() and roadmap_tool.works():
+        RM_TOOL = {"ok": True, "action": "current", "installed": latest, "latest": latest}
+        return RM_TOOL
+    with _rm_lock:
+        rm_stop_all()
+        RM_TOOL = roadmap_tool.ensure_latest(log=lambda m: print(m, flush=True), latest=latest)
+    if RM_TOOL["action"] not in ("current", "upgraded"):
+        _rm_checked = time.time() - RM_CHECK_EVERY + 60  # retry on a page load a minute from now
+    print(f"[roadmap] {RM_TOOL['action']}: installed {(RM_TOOL.get('installed') or '?')[:7]}, "
+          f"main {(RM_TOOL.get('latest') or '?')[:7]}" + (f" ({RM_TOOL['error']})" if RM_TOOL.get("error") else ""),
+          flush=True)
+    return RM_TOOL
 
 
 def rm_fix(name: str, body: bytes) -> bytes:
@@ -880,6 +970,81 @@ def _clear_caches() -> None:
     _pm_cache = (0.0, {})
     _api_cache.clear()
     _extra_cache.clear()
+
+
+PKG_DIR = Path(__file__).resolve().parent
+RELOAD_POLL = 3.0      # seconds between source checks
+RELOAD_SETTLE = 8.0    # a change must be quiet this long before a restart (an editor may be mid-way through several files)
+
+
+def code_files() -> list[Path]:
+    return sorted([*PKG_DIR.rglob("*.py"), *(PKG_DIR / "static").glob("*")])
+
+
+def code_stamp(files: list[Path] | None = None) -> str:
+    """Hash of the dashboard's own source (names, sizes, mtimes): the page reloads itself when it changes."""
+    h = hashlib.sha1()
+    for f in files if files is not None else code_files():
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        h.update(f"{f.relative_to(PKG_DIR)}:{st.st_size}:{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:12]
+
+
+def py_stamp() -> str:
+    return code_stamp([f for f in code_files() if f.suffix == ".py"])
+
+
+def reload_enabled() -> bool:
+    """Live reload only for a source checkout (the editable install), unless [dash] auto_reload = false."""
+    if os.environ.get("AGENTCONTROLLER_NO_RELOAD"):
+        return False
+    if (hub.gconfig().get("dash") or {}).get("auto_reload") is False:
+        return False
+    return (PKG_DIR.parent / ".git").exists()
+
+
+def code_ok() -> str | None:
+    """Import the new code in a separate interpreter; the error text, or None when it loads."""
+    try:
+        r = subprocess.run([sys.executable, "-c", "import agentcontroller.dash, agentcontroller.runner"],
+                           cwd=str(PKG_DIR.parent), capture_output=True, text=True, timeout=60, **NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    return None if r.returncode == 0 else (r.stderr or r.stdout).strip()[-600:]
+
+
+def reloader(close) -> None:
+    """Restart the dashboard when its Python source changes and the new code imports cleanly.
+
+    `close()` stops the listeners (freeing the ports) before the replacement starts. A broken edit is logged
+    and the running version keeps serving until the next change. HTML/JS changes need no restart: the page
+    is read per request, and open pages reload themselves when `code_stamp` changes.
+    """
+    seen = py_stamp()
+    while True:
+        time.sleep(RELOAD_POLL)
+        cur = py_stamp()
+        if cur == seen:
+            continue
+        time.sleep(RELOAD_SETTLE)
+        if py_stamp() != cur:  # still being edited
+            continue
+        seen = cur
+        err = code_ok()
+        if err:
+            print(f"[reload] new code does not import, keeping the running version:\n{err}", flush=True)
+            continue
+        print("[reload] source changed: restarting the dashboard", flush=True)
+        close()
+        cmd = [sys.executable, *(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])[1:]]
+        kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
+        try:
+            subprocess.Popen(cmd, cwd=os.getcwd(), close_fds=True, **kw)
+        finally:
+            os._exit(0)
 
 
 def _version() -> str:
@@ -954,10 +1119,13 @@ class Handler(BaseHTTPRequestHandler):
             obj = scrub(urlparse(self.path).path, obj)
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
-    def _body(self) -> dict:
+    def _body(self, limit: int = 1 << 20) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
+        if n > limit:  # don't parse a truncated body
+            self.rfile.read(n)
+            return {"_too_big": True}
         try:
-            obj = json.loads(self.rfile.read(min(n, 1 << 20)) or b"{}")
+            obj = json.loads(self.rfile.read(n) or b"{}")
             return obj if isinstance(obj, dict) else {}
         except ValueError:
             return {}
@@ -1055,6 +1223,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "static/index.html missing"}, 500)
         if u.path == "/api/health":
             return self._json({"mode": "all" if ALL_MODE else "project", "version": _version(), "pid": os.getpid(),
+                               "build": code_stamp(),
                                "projects": len(_pm_cache[1])})
         if u.path == "/api/me":
             if self.access:
@@ -1119,7 +1288,13 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         if u.path.startswith("/rmui/"):
             return self._rmui("POST", u, q)
-        body = self._abody = self._body()
+        body = self._body(30 << 20 if u.path == "/api/inbox" else 1 << 20)  # inbox carries attachments
+        if body.pop("_too_big", False):
+            return self._json({"ok": False, "error": "request too large"}, 413)
+        self._abody = body
+        if isinstance(body.get("files"), list):  # the audit log gets names and sizes, never file data
+            self._abody = {**body, "files": [{"name": f.get("name"), "b64len": len(str(f.get("data") or ""))}
+                                             for f in body["files"] if isinstance(f, dict)]}
         if u.path == "/api/forget_project":
             key = body.get("p")
             if not isinstance(key, str) or key not in projects_map():
@@ -1158,10 +1333,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "run is not running"}, 409)
             if body.get("control") == "stop":
                 return reply(stop_graceful(name))
-            if isinstance(body.get("text"), str) and body["text"].strip():
-                append_jsonl(CFG.runs / f"{name}.inbox.jsonl", {"text": body["text"].strip(), "ts": now()})
+            if isinstance(body.get("answer"), str) and isinstance(body.get("answers"), dict):
+                append_jsonl(CFG.runs / f"{name}.inbox.jsonl", {"answer": body["answer"], "ts": now(),
+                             "answers": {str(k)[:2000]: str(v)[:4000] for k, v in body["answers"].items()}})
                 return self._json({"ok": True})
-            return self._json({"ok": False, "error": "need text or control=stop"}, 400)
+            text = body.get("text").strip() if isinstance(body.get("text"), str) else ""
+            files, err = save_attachments(name, body.get("files"))
+            if err:
+                return self._json({"ok": False, "error": err}, 400)
+            if text or files:
+                line = {"text": text, "ts": now()}
+                if files:
+                    line["files"] = files
+                append_jsonl(CFG.runs / f"{name}.inbox.jsonl", line)
+                return self._json({"ok": True, "files": [f["name"] for f in files]})
+            return self._json({"ok": False, "error": "need text, files, an answer or control=stop"}, 400)
         if u.path == "/api/kill":
             return reply(kill(name))
         if u.path == "/api/archive":
@@ -1188,6 +1374,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "unknown project"}, 404)
         if method == "POST" and not rest.startswith("api/"):
             return self._json({"ok": False, "error": "not found"}, 404)
+        if method == "GET" and rest in ("", "index.html"):  # a page load: a safe moment to upgrade the CLI
+            rm_refresh()
         port, err = rm_server(key)
         if port is None:
             return self._send(502, f"<!doctype html><p>{err}</p>".encode("utf-8"), "text/html")
@@ -1256,7 +1444,7 @@ class Handler(BaseHTTPRequestHandler):
                         emit({"kind": "text", "text": l})
                 self.wfile.flush()
             while True:
-                sent = False
+                sent = behind = False
                 for st in srcs:
                     path = st["path"]
                     try:
@@ -1269,7 +1457,8 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     with path.open("rb") as fh:
                         fh.seek(st["pos"])
-                        chunk = fh.read(1 << 20)
+                        chunk = fh.read(STREAM_CHUNK)
+                    behind = behind or size - st["pos"] > len(chunk)  # catching up on a big file: no sleep
                     if st["mode"] in ("jsonl", "plan"):
                         end = chunk.rfind(b"\n") + 1  # only complete lines; a partial write is picked up next poll
                         st["pos"] += end
@@ -1298,7 +1487,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b": hb\n\n")
                     self.wfile.flush()
                     last_beat = time.time()
-                time.sleep(0.5)
+                if not behind:
+                    time.sleep(0.5)
         except OSError:
             return
 
@@ -1373,12 +1563,24 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as e:
             print(f"WARNING: Access listener not started: {e}", flush=True)
     threading.Thread(target=lambda: (projects_map(), hub.claude_dirs()), daemon=True).start()  # warm the caches
+    threading.Thread(target=rm_refresh, args=(True,), daemon=True).start()  # roadmap CLI at WebRoadmap main
+    if reload_enabled():
+        def close():
+            for s_ in (srv, asrv):
+                if s_ is not None:
+                    s_.server_close()
+            rm_stop_all()
+            if ALL_MODE:
+                with contextlib.suppress(OSError):
+                    dashfile.unlink()
+        threading.Thread(target=reloader, args=(close,), daemon=True).start()
+        print("Live reload on: the dashboard restarts itself when its source changes", flush=True)
+    dashfile = registry.home() / "dash.json"
     what = "all projects" if ALL_MODE else f"project {pcfg.root}"
     print(f"AgentController dashboard: http://127.0.0.1:{port}/  ({what})", flush=True)
     if TOKEN:
         print(f"Remote access on {args.host}:{port}: open http://<this-host>:{port}/?token=<{tok}>"
               " once per device (the token is then kept in a cookie)", flush=True)
-    dashfile = registry.home() / "dash.json"
     if ALL_MODE:
         try:
             registry._write(dashfile, {"port": port, "pid": os.getpid(), "started": time.time()})

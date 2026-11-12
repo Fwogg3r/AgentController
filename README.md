@@ -67,7 +67,7 @@ or in Claude Code: `/api-request agent: implement the brief in briefs/task.md`.
 | git | worktrees, branches, the dashboard's git info | **required** | you install it |
 | This package (`agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor`) | everything | **required** | `install.py` (`uv tool install --editable`) |
 | `claude-agent-sdk`, `anthropic` | API agents, one-shot calls | **required** | dependencies of the package; the SDK bundles the Claude Code binary it drives |
-| [`roadmap` CLI](https://github.com/Fwogg3r/WebRoadmap) (WebRoadmap) | the dashboard's Roadmap tab, project roadmaps | **required** for those | `install.py` asks, then `uv tool install` at a pinned commit (`--no-roadmap` to skip) |
+| [`roadmap` CLI](https://github.com/Fwogg3r/WebRoadmap) (WebRoadmap) | the dashboard's Roadmap tab, project roadmaps | **required** for those | `install.py` asks, then installs WebRoadmap's latest main; agentdash and `install.py` keep it there (`--no-roadmap` to skip) |
 | Anthropic API key | `agentctl`, `agentask`, `/batchy` | recommended | `install.py --init PROJECT` (stored in the project's gitignored `.agentcontroller/api.key`, never in a global `ANTHROPIC_API_KEY`) |
 | Claude Code CLI | `/api-request`, `/batchy`, `agentpilot`, plan-session view | recommended | you install it; `install.py` prints how if it is missing |
 | claude-batch-toolkit | `/batchy` (Batch API, 50% off) | optional | `install.py` fetches it at a pinned commit (`--no-batchy` to skip) |
@@ -86,7 +86,7 @@ Restart Claude Code afterwards so it picks up the skills and the MCP server. The
 | What | Where |
 |---|---|
 | The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
-| The `roadmap` CLI and its Claude skill (asks first); with `--local` also aider | `uv tool install` from GitHub at pinned commits (WebRoadmap, Aider-AI/aider); skill in `~/.claude/skills/roadmap/` |
+| The `roadmap` CLI and its Claude skill (asks first); with `--local` also aider | `uv tool install` from GitHub: WebRoadmap at its latest main (upgraded on every run), aider at a pinned commit; skill in `~/.claude/skills/roadmap/` |
 | **`/api-request`** skill: one-shot asks and design debates with another model, background API agents, dashboard, spend | `~/.claude/skills/api-request/` (`SKILL.md` + `ask_api.py`) |
 | **`/batchy`** skill + `claude-batch` MCP server: non-urgent work through the Message Batches API at 50% off | Fetched from [s2-streamstore/claude-batch-toolkit](https://github.com/s2-streamstore/claude-batch-toolkit) at a pinned commit into `~/.claude/skills/batchy/` and `~/.claude/mcp/`, registered in `~/.claude.json` |
 | Windows: the hidden Task Scheduler logon task **"AgentController dashboard"** (`agentdash --all`, so the dashboard is always up at http://127.0.0.1:8765/) and `~/.agentcontroller/config.toml` with commented defaults | Task Scheduler, `~/.agentcontroller/` |
@@ -149,10 +149,10 @@ terracotta accents; works in a narrow split-screen window). Spec: [docs/unified-
 - **Projects:** a list with live counts (working / waiting / crashed); discovered from the registry (`~/.agentcontroller`, filled by the CLIs), Claude Code transcript directories and `[dash] scan`. "All projects" merges them. Model checkboxes filter every list.
 - **Icons per agent kind** (`AGENT_PROFILES` in `index.html`): "Clawd", the orange pixel-art critter, for Claude (bobbing while it works, dozing while it waits, asleep when finished, "!" when crashed); an original Qwen critter for local Qwen; a chip for any other local model.
 - **Trees:** runs with a `parent` (`--parent`, `AGENTCONTROLLER_PARENT`, Claude plan subagents) nest under it; a parent collapses to "(n agents)".
-- **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (WebRoadmap's own interactive page for the project's `docs/roadmap`, editable with operate access; a button switches to a read-only summary with agents linked by `--roadmap ID`) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
+- **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (WebRoadmap's own interactive page for the project's `docs/roadmap`, editable with operate access; a button switches to a read-only summary with agents linked by `--roadmap ID`; agentdash upgrades the `roadmap` CLI to WebRoadmap's latest main at startup and when this page is loaded) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
 - **Local runs:** a context gauge (tokens of the last call vs the window, per-call history), a thinking pane apart from answer/edits/tests, stage progress, and approval buttons.
 - **Phone layout:** at <= 640px the page switches to a list view and a detail view (back button returns to the list), a bottom tab bar for Roadmap / Jobs / Models, a menu for spend and "+ New agent", and Filters in a bottom sheet. Desktop is unchanged.
-- **Attention queue:** the header badge lists what needs you: local approvals, pmjc approvals, crashes in the last 24 h, waiting Claude sessions.
+- **Attention queue:** the header badge lists what needs you: local approvals, pmjc approvals, crashes in the last 24 h, waiting Claude sessions, questions from API agents.
 - **Global config** `~/.agentcontroller/config.toml` (all keys optional):
 
 ```toml
@@ -195,6 +195,20 @@ The per-project features below apply as before.
   and its output in `<runs>/<name>.log`.
 - **Steering:** *Send to agent* (confirm step; delivered at the agent's next turn), *Stop after this turn*, and *Forward to primary*
   (writes `primary_inbox.jsonl` for a coordinating session; it runs `agentwait` in the background to be woken).
+- **Live reload:** installed from a git checkout (the default `install.py` editable install), agentdash restarts itself
+  when its Python source changes and the new code imports cleanly (a broken edit keeps the old version running; see
+  `~/.agentcontroller/dash.log`). Open pages reload themselves when the build changes. `[dash] auto_reload = false` turns it off.
+- **Markdown:** agent text in every transcript renders as markdown (headings, lists, tables, code, quotes, links), like Claude Code shows it.
+- **Claude sessions:** a session whose turn ended while a background command or background agent still runs shows
+  *waiting* (not *finished*) until its task notification arrives; an unanswered question shows *waiting · question*.
+  Tool calls still running pulse.
+- **Attachments:** *Attach* (or paste / drop) adds up to 10 files (20 MB) to a message. They are saved to
+  `<runs>/attachments/<run>/`; images and PDFs reach the agent as content blocks, text files up to 200 KB are inlined,
+  anything else is referenced by path.
+- **Questions:** when an API agent calls `AskUserQuestion`, the run shows *waiting · question*, the question pops up once as a
+  dialog (options, multi-select, free-text *Other*), sits in the attention queue and appears as a card in the transcript.
+  The answer goes back to the tool; *Stop* or 4 h without an answer denies it and the agent uses its own judgment.
+  Claude Code (plan) sessions are read-only: they can't be messaged or answered from the dashboard.
 - **Removing:** per run and each behind a confirmation: stop gracefully, kill the process tree (spend so far is logged),
   remove from list (logs archived to `<runs>/archive/`), delete the worktree and branch. Deleting is offered only when the branch
   is merged into its base and clean; otherwise it shows the unmerged commits and the uncommitted count and needs an explicit
@@ -227,7 +241,8 @@ the transcript directory with `[claude] projects_dir` in `agentcontroller.toml`.
 ### How steering works
 
 The runner appends structured events to `<runs>/<name>.events.jsonl` and polls `<runs>/<name>.inbox.jsonl` about once a second.
-`{"text": ...}` lines become user messages; `{"control":"stop"}` ends the run after the current turn. The prompt is a
+`{"text": ..., "files": [...]}` lines become user messages; `{"answer": <question id>, "answers": {...}}` answers a pending
+`AskUserQuestion` (written to the events as `question` / `answer`); `{"control":"stop"}` ends the run after the current turn. The prompt is a
 **streaming** generator: this is also what keeps the SDK's permission callback (`can_use_tool`) alive. A run ends by itself
 2 s after a result when no message is pending. Background tasks (`run_in_background`) hold the run open until they end
 and the agent has answered their notification; closing the stream earlier breaks every later tool approval ("Stream closed").

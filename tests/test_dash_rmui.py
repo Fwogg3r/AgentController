@@ -59,3 +59,33 @@ def test_pmjc_token_file(tmp_path):
     assert hub.pmjc_token_file({}) is None
     assert hub.pmjc_token_file({"secrets_dir": str(tmp_path)}) == tmp_path / "pmjc" / "agentdash.token"
     assert hub.pmjc_token_file({"secrets_dir": str(tmp_path), "pmjc": {"token_file": str(tmp_path / "t")}}) == tmp_path / "t"
+
+
+def test_rmui_page_load_checks_the_cli(server, home, monkeypatch):
+    """A Roadmap page load (not its assets or API calls) is when agentdash checks WebRoadmap main."""
+    calls = []
+    monkeypatch.setattr(dash, "rm_refresh", lambda force=False: calls.append(force) or {})
+    monkeypatch.setattr(dash, "rm_server", lambda key: (None, "no server in this test"))
+    p = home / "delta"
+    (p / "docs" / "roadmap").mkdir(parents=True)
+    rid = dash.rm_id(registry.register_project(p))
+    assert raw(server, f"/rmui/{rid}/")[0] == 502 and calls == [False]
+    raw(server, f"/rmui/{rid}/app.js")
+    raw(server, f"/rmui/{rid}/api/roadmap")
+    assert calls == [False]
+
+
+def test_rm_refresh_stops_serves_only_when_behind(monkeypatch):
+    from agentcontroller import roadmap_tool
+    stopped, ensured = [], []
+    monkeypatch.setattr(dash, "rm_stop_all", lambda: stopped.append(1))
+    monkeypatch.setattr(roadmap_tool, "ensure_latest", lambda log=print, latest=None: ensured.append(latest) or
+                        {"ok": True, "action": "upgraded", "installed": latest, "latest": latest})
+    monkeypatch.setattr(roadmap_tool, "works", lambda: True)
+    monkeypatch.setattr(roadmap_tool, "latest_commit", lambda timeout=8: "b" * 40)
+    monkeypatch.setattr(roadmap_tool, "installed_commit", lambda: "b" * 40)
+    assert dash.rm_refresh(True)["action"] == "current" and not stopped and not ensured
+    assert dash.rm_refresh()["action"] == "current"  # throttled: no second GitHub check
+    monkeypatch.setattr(roadmap_tool, "installed_commit", lambda: "a" * 40)
+    assert dash.rm_refresh()["action"] == "current"  # still throttled
+    assert dash.rm_refresh(True)["action"] == "upgraded" and stopped == [1] and ensured == ["b" * 40]

@@ -18,6 +18,7 @@ def server(home, monkeypatch):
     monkeypatch.setattr(dash, "PINNED", None)
     monkeypatch.setattr(dash, "PINNED_ENTRY", None)
     monkeypatch.setattr(dash, "TOKEN", None)
+    monkeypatch.setattr(dash, "rm_refresh", lambda force=False: {})  # never upgrade the real roadmap CLI in tests
     srv = ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
