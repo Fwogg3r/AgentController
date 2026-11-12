@@ -1,4 +1,4 @@
-"""Continue a Claude Code session from agentdash, billed to the plan.
+"""Continue (or start) a Claude Code session from agentdash, billed to the plan.
 
 agentdash starts one of these per message to a finished Claude Code session (and feeds follow-ups, answers and
 approval decisions through its inbox while it runs). It resumes the session in place with the Claude Code CLI:
@@ -90,7 +90,7 @@ class Approvals:
         return PermissionResultDeny(message="No decision from the owner in time.")
 
 
-async def drive(sid: str, cwd: str, first: dict, model: str | None, sd: Path) -> int:
+async def drive(sid: str, cwd: str, first: dict, model: str | None, sd: Path, new: bool = False) -> int:
     events = DriveLog(sd / "events.jsonl")
     inbox = sd / "inbox.jsonl"
     asker, approvals = Asker(inbox, events), Approvals(inbox, events)
@@ -103,10 +103,10 @@ async def drive(sid: str, cwd: str, first: dict, model: str | None, sd: Path) ->
     session = Session(first.get("text") or "", inbox, events, first_files=first.get("files") or None)
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # the plan login, never the API
     options = ClaudeAgentOptions(
-        resume=sid, cwd=cwd, cli_path=find_cli(), model=model, permission_mode="default", can_use_tool=approve,
+        resume=None if new else sid, session_id=sid if new else None, cwd=cwd, cli_path=find_cli(), model=model, permission_mode="default", can_use_tool=approve,
         setting_sources=["user", "project", "local"], env=env, max_buffer_size=64 * 1024 * 1024,
     )
-    events.write("drive_start", session=sid, model=model)
+    events.write("drive_start", session=sid, model=model, new=new)
     code = 0
     try:
         async for msg in query(prompt=session.prompts(), options=options):
@@ -134,7 +134,8 @@ async def drive(sid: str, cwd: str, first: dict, model: str | None, sd: Path) ->
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--session", required=True, help="full Claude Code session id")
+    ap.add_argument("--session", required=True, help="full Claude Code session id (with --new: the id to give it)")
+    ap.add_argument("--new", action="store_true", help="start a new session instead of resuming one")
     ap.add_argument("--cwd", required=True, help="the session's working directory")
     ap.add_argument("--first", required=True, help="JSON file: {text, files: [{name, path}]}")
     ap.add_argument("--model", help="model id (default: the session's last model)")
@@ -148,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     first = json.loads(Path(args.first).read_text(encoding="utf-8"))
     (sd / "pid").write_text(str(os.getpid()))
     try:
-        return asyncio.run(drive(args.session, args.cwd, first, args.model, sd))
+        return asyncio.run(drive(args.session, args.cwd, first, args.model, sd, new=args.new))
     finally:
         (sd / "pid").unlink(missing_ok=True)
 

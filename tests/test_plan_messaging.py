@@ -103,3 +103,14 @@ def test_context_tokens_parsed(proj):
     transcript(t, str(a), 123_456)
     m = claude_sessions.session_meta(t)
     assert m["context_tokens"] == 123_456 and m["cwd"] == str(a) and m["sid"] == SID and m["state"] == "finished"
+
+
+def test_new_session(proj):
+    key, a, t, launched = proj
+    code, res = dash.new_session(key, {"text": "start here", "model": "haiku"})
+    assert code == 200 and res["run"].startswith("plan.") and res["session"].startswith(res["run"][5:])
+    cmd, kw = launched[0]
+    assert "--new" in cmd and cmd[cmd.index("--model") + 1] == "haiku" and cmd[cmd.index("--cwd") + 1] == str(a)
+    assert "ANTHROPIC_API_KEY" not in kw["env"]
+    assert dash.new_session(key, {"text": ""})[0] == 400
+    assert dash.new_session(key, {"text": "x", "model": "gpt"})[0] == 400

@@ -208,6 +208,9 @@ The per-project features below apply as before.
 - **Questions:** when an API agent calls `AskUserQuestion`, the run shows *waiting · question*, the question pops up once as a
   dialog (options, multi-select, free-text *Other*), sits in the attention queue and appears as a card in the transcript.
   The answer goes back to the tool; *Stop* or 4 h without an answer denies it and the agent uses its own judgment.
+- **New Claude Code session:** *+ New session* (any project, no toml needed) starts a Claude Code session in the
+  project's folder on your plan with a first message, optional files and model; it then behaves like any session below.
+  *+ New API agent* is the budget-capped agentctl launcher (needs `agentcontroller.toml` and the key file).
 - **Messaging Claude Code sessions:** *Send to agent* also continues a finished Claude Code session, billed to your plan:
   `agentcontroller.resume` resumes it in place (same transcript, your settings and login, never an API key). Tool calls
   that would prompt in the Claude app pop up in the dashboard for Allow / Deny; questions too. Over

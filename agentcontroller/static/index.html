@@ -406,7 +406,8 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
   <div id="logo"></div>
   <h1 id="title">Agents</h1>
   <div id="hmenu">
-  <button class="primary need-operate" id="newbtn" disabled>+ New agent</button>
+  <button class="primary need-operate" id="newsess" disabled title="pick a project first">+ New session</button>
+  <button class="need-operate" id="newbtn" disabled title="API agent (agentctl): needs the project's agentcontroller.toml and key file">+ New API agent</button>
   <div class="spend">
     <span id="sp-label" title="logged API usage vs the cap">total</span> <b id="sp-total">-</b> / <span id="sp-cap">-</span>
     <span class="bar" id="sp-bar"><i></i></span>
@@ -522,6 +523,17 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
   <label>Resume session id (optional)</label><input id="n-resume" autocomplete="off">
   <div class="err" id="n-err"></div>
   <div class="row" style="margin-top:8px"><button class="primary" id="n-go">Launch</button><button id="n-cancel">Cancel</button></div>
+</dialog>
+<dialog id="sessdlg">
+  <h2>New Claude Code session</h2>
+  <div class="hint" id="s-where"></div>
+  <div class="two">
+    <div><label>Model</label><select id="s-model"><option value="">your default</option><option>opus</option><option>sonnet</option><option>haiku</option><option>fable</option></select></div>
+    <div><label>Files (optional)</label><button id="s-attach" type="button">Attach</button> <span class="hint" id="s-files"></span><input type="file" id="s-fileinp" multiple hidden></div>
+  </div>
+  <label>First message</label><textarea id="s-text" placeholder="What should Claude do?"></textarea>
+  <div class="err" id="s-err"></div>
+  <div class="row" style="margin-top:8px"><button class="primary" id="s-go">Start</button><button id="s-cancel">Cancel</button></div>
 </dialog>
 <dialog id="qdlg"><div id="qdlg-body"></div></dialog>
 <dialog id="confdlg">
@@ -793,6 +805,8 @@ async function loadCfg() {
   $("#title").textContent = (c && c.project || pj?.name || "Project") + " agents";
 }
 function setNewBtn() {
+  const s = $("#newsess"); s.disabled = sel === ALL;
+  s.title = sel === ALL ? "pick a project first" : "start a Claude Code session in this project (billed to your plan)";
   const b = $("#newbtn"), ok = !!(cfg && cfg.can_launch);
   b.disabled = !ok;
   b.title = sel === ALL ? "pick a project first" : ok ? "" : "this project has no agentcontroller.toml / key file";
@@ -1455,6 +1469,41 @@ function popQuestions() {   // a new question or approval from any run pops up o
   dlg.showModal();
 }
 
+// ---- new Claude Code session (agentcontroller.resume --new, on the plan) ----
+let sessFiles = [];
+$("#newsess").onclick = () => {
+  if (sel === ALL) return;
+  const pj = projects.find(p => p.key === sel);
+  $("#s-where").textContent = "In " + (pj?.name || sel) + ". Billed to your plan, never the API; tool approvals and questions pop up here.";
+  $("#s-err").textContent = ""; sessFiles = []; $("#s-files").textContent = "";
+  $("#sessdlg").showModal(); $("#s-text").focus();
+};
+$("#s-cancel").onclick = () => $("#sessdlg").close();
+$("#s-attach").onclick = () => $("#s-fileinp").click();
+$("#s-fileinp").onchange = ev => {
+  for (const f of ev.target.files) {
+    const rd = new FileReader();
+    rd.onload = () => { sessFiles.push({ name: f.name, data: String(rd.result).split(",")[1] || "" }); $("#s-files").textContent = sessFiles.map(x => x.name).join(", "); };
+    rd.readAsDataURL(f);
+  }
+  ev.target.value = "";
+};
+$("#s-go").onclick = async () => {
+  const text = $("#s-text").value.trim(), project = sel;
+  if (!text && !sessFiles.length) { $("#s-err").textContent = "Write a first message."; return; }
+  $("#s-go").disabled = true;
+  const r = await post("/api/new_session", { p: project }, { text, model: $("#s-model").value, ...(sessFiles.length ? { files: sessFiles } : {}) });
+  $("#s-go").disabled = false;
+  if (!r.ok) { $("#s-err").textContent = r.error || "failed"; return; }
+  $("#sessdlg").close(); $("#s-text").value = ""; sessFiles = [];
+  for (let i = 0; i < 20; i++) {   // the transcript appears once Claude Code has started
+    await loadRuns();
+    if (allRuns.some(x => x.project === project && x.name === r.run)) { select(project, r.run); return; }
+    await new Promise(res => setTimeout(res, 1000));
+  }
+  $("#hint").textContent = "Session started: it shows in the list once Claude Code writes its transcript.";
+};
+
 // ---- attachments ----
 let pending = [];   // [{name, size, data(base64)}]
 function drawFiles() {
@@ -1849,6 +1898,7 @@ mq.addEventListener("change", () => { setDetail(false); fitNames(); fitMode(); }
 const menuOpen = on => { $("#hdr").classList.toggle("menu-open", on); $("#menubtn").setAttribute("aria-expanded", on); if (on) $("#attn-pop").hidden = true; };
 $("#menubtn").onclick = ev => { ev.stopPropagation(); menuOpen(!$("#hdr").classList.contains("menu-open")); };
 $("#newbtn").addEventListener("click", () => menuOpen(false));
+$("#newsess").addEventListener("click", () => menuOpen(false));
 document.addEventListener("click", ev => { if (!ev.target.closest("#hmenu, #menubtn")) menuOpen(false); });
 $("#attn").addEventListener("click", () => menuOpen(false));
 const sheet = on => { $("#fbox").classList.toggle("open", on); $("#sheetbg").hidden = !on; };

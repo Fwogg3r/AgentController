@@ -29,7 +29,7 @@ ENDPOINTS: dict[tuple[str, str], str] = {
                                     "/api/attention", "/api/runs", "/api/spend", "/api/config", "/api/roadmap",
                                     "/api/worktree", "/api/stream")},
     ("GET", "/api/billed"): "operate",
-    **{("POST", p): "operate" for p in ("/api/inbox", "/api/local_approve", "/api/primary", "/api/launch", "/api/kill")},
+    **{("POST", p): "operate" for p in ("/api/inbox", "/api/new_session", "/api/local_approve", "/api/primary", "/api/launch", "/api/kill")},
     **{("POST", p): "admin" for p in ("/api/archive", "/api/worktree_delete", "/api/forget_project")},
 }
 

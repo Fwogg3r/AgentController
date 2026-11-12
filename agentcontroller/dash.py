@@ -30,6 +30,7 @@ import subprocess
 import sys
 import threading
 import time
+
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -41,6 +42,8 @@ from . import access as acc_mod
 from . import NO_WINDOW, claude_sessions, hub, registry, roadmap_tool
 from . import resume as resume_mod
 from .config import CONFIG_NAME, Config, load
+
+BOOT_TIME = time.time()  # source edited after this (while we were importing) means a restart is due
 
 PAGE = Path(__file__).resolve().parent / "static" / "index.html"
 PKG_PARENT = str(Path(__file__).resolve().parent.parent)
@@ -632,23 +635,56 @@ def plan_inbox(key: str, name: str, body: dict) -> tuple[int, dict]:
         line = {"text": text, "ts": now(), **({"files": files} if files else {})}
         append_jsonl(inbox, line)
         return 200, {"ok": True, "queued": True}
+    launch_driver(sid, meta["cwd"], text, files, meta.get("model"))
+    return 200, {"ok": True, "started": True, "context_tokens": meta["context_tokens"]}
+
+
+SESSION_MODELS = {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku", "fable": "fable"}  # aliases the CLI resolves
+
+
+def new_session(key: str, body: dict) -> tuple[int, dict]:
+    """Start a new Claude Code session in the project's folder, billed to the plan, with the first message."""
+    entry = projects_map().get(key) or {}
+    cwd = entry.get("path")
+    if not cwd or not Path(cwd).is_dir():
+        return 404, {"ok": False, "error": "the project's folder is gone"}
+    text = body.get("text").strip() if isinstance(body.get("text"), str) else ""
+    if not text and not body.get("files"):
+        return 400, {"ok": False, "error": "need a first message"}
+    model = body.get("model") or None
+    if model is not None and model not in SESSION_MODELS:
+        return 400, {"ok": False, "error": f"model must be one of {', '.join(SESSION_MODELS)} or empty"}
+    import uuid
+    sid = str(uuid.uuid4())
+    sd = resume_mod.state_dir(sid)
+    files, err = save_attachments("new", body.get("files"), base=sd / "attachments" / time.strftime("%Y%m%d"))
+    if err:
+        return 400, {"ok": False, "error": err}
+    launch_driver(sid, cwd, text, files, SESSION_MODELS.get(model) if model else None, new=True)
+    return 200, {"ok": True, "started": True, "run": claude_sessions.PREFIX + sid[:8], "session": sid}
+
+
+def launch_driver(sid: str, cwd: str, text: str, files: list[dict], model: str | None, new: bool = False) -> None:
+    """Start agentcontroller.resume detached (no window), on the plan login only."""
+    sd = resume_mod.state_dir(sid)
     sd.mkdir(parents=True, exist_ok=True)
     first = sd / f"first-{time.strftime('%Y%m%d-%H%M%S')}.json"
     first.write_text(json.dumps({"text": text, "files": files}, ensure_ascii=False), encoding="utf-8")
-    cmd = [sys.executable, "-m", "agentcontroller.resume", "--session", sid, "--cwd", meta["cwd"], "--first", str(first)]
-    if meta.get("model"):
-        cmd += ["--model", meta["model"]]
+    cmd = [sys.executable, "-m", "agentcontroller.resume", "--session", sid, "--cwd", cwd, "--first", str(first)]
+    if new:
+        cmd.append("--new")
+    if model:
+        cmd += ["--model", model]
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # plan login only
     kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
     log = open(sd / "drive.log", "a", encoding="utf-8")
     try:
-        proc = subprocess.Popen(cmd, cwd=meta["cwd"], env=env, stdin=subprocess.DEVNULL, stdout=log,
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log,
                                 stderr=subprocess.STDOUT, **kw)
     finally:
         log.close()
     (sd / "pid").write_text(str(proc.pid))  # at once, so a quick second message is queued, not a second driver
     _extra_cache.clear()
-    return 200, {"ok": True, "started": True, "context_tokens": meta["context_tokens"]}
 
 
 def stop_graceful(name: str) -> tuple[int, dict]:
@@ -1168,6 +1204,11 @@ def reloader(close) -> None:
     is read per request, and open pages reload themselves when `code_stamp` changes.
     """
     seen = py_stamp()
+    try:  # an edit that landed while this process was importing: its code is not what is running
+        if max(f.stat().st_mtime for f in code_files() if f.suffix == ".py") > BOOT_TIME:
+            seen = ""
+    except (OSError, ValueError):
+        pass
     while True:
         time.sleep(RELOAD_POLL)
         cur = py_stamp()
@@ -1464,6 +1505,9 @@ class Handler(BaseHTTPRequestHandler):
             if not name or not isinstance(aid, str):
                 return self._json({"ok": False, "error": "need run and id"}, 400)
             return reply(hub.decide_local(key, name, aid, bool(body.get("approve"))))
+        if u.path == "/api/new_session":
+            code, res = new_session(key, body)
+            return self._json(res, code)
         if u.path == "/api/primary":
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():
