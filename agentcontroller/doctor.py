@@ -20,6 +20,8 @@ import re
 import shutil
 import socket
 import subprocess
+
+from . import NO_WINDOW
 import sys
 import tomllib
 import urllib.error
@@ -87,7 +89,7 @@ def _which(exe: str) -> str | None:
 def _version(path: str, *args: str) -> str:
     """First line of `<path> --version`, or ''. Never raises."""
     try:
-        r = subprocess.run([path, *(args or ("--version",))], capture_output=True, text=True, timeout=15)
+        r = subprocess.run([path, *(args or ("--version",))], capture_output=True, text=True, timeout=15, **NO_WINDOW)
         return ((r.stdout or r.stderr).strip().splitlines() or [""])[0][:120]
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -104,7 +106,7 @@ def _task_exists() -> bool | None:
     if os.name != "nt":
         return None
     try:
-        return subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, timeout=15).returncode == 0
+        return subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, timeout=15, **NO_WINDOW).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -118,7 +120,7 @@ def _dash_up(port: int) -> bool:
 
 def _tool_bin_dir() -> Path | None:
     try:
-        out = subprocess.run(["uv", "tool", "dir", "--bin"], capture_output=True, text=True, timeout=15).stdout.strip()
+        out = subprocess.run(["uv", "tool", "dir", "--bin"], capture_output=True, text=True, timeout=15, **NO_WINDOW).stdout.strip()
         return Path(out) if out else None
     except (OSError, subprocess.SubprocessError):
         return None

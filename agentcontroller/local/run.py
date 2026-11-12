@@ -8,6 +8,8 @@ import os
 import queue
 import shlex
 import subprocess
+
+from .. import NO_WINDOW
 import sys
 import threading
 import time
@@ -152,11 +154,11 @@ def approve(run: Run, s: Settings, gate: str, summary: str, detail: dict) -> boo
 
 def git(root: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace").stdout
+                          errors="replace", **NO_WINDOW).stdout
 
 
 def git_ok(root: Path, *args: str) -> bool:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True).returncode == 0
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, **NO_WINDOW).returncode == 0
 
 
 def changed_paths(root: Path) -> list[str]:
@@ -244,7 +246,7 @@ def _check(cmd: str, root: Path, timeout: int = 900) -> tuple[bool, str]:
     args = cmd if os.name == "nt" else shlex.split(cmd)
     try:
         p = subprocess.run(args, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+                           timeout=timeout, stdin=subprocess.DEVNULL, **NO_WINDOW)
         return p.returncode == 0, (p.stdout + p.stderr)[-6000:]
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"

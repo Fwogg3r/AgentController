@@ -33,7 +33,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import access as acc_mod
-from . import claude_sessions, hub, registry
+from . import NO_WINDOW, claude_sessions, hub, registry
 from .config import CONFIG_NAME, Config, load
 
 PAGE = Path(__file__).resolve().parent / "static" / "index.html"
@@ -98,7 +98,8 @@ def usage_records() -> list[dict]:
 
 def git(wt: str | Path, *args: str, timeout: int = 20) -> tuple[int, str]:
     try:
-        p = subprocess.run(["git", "-C", str(wt), *args], capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(["git", "-C", str(wt), *args], capture_output=True, text=True, timeout=timeout,
+                           **NO_WINDOW)
         return p.returncode, (p.stdout if p.returncode == 0 else p.stdout + p.stderr).strip()
     except (OSError, subprocess.SubprocessError) as e:
         return 1, str(e)
@@ -126,7 +127,8 @@ def pid_alive(pid: int | None) -> bool:
         hit = _pid_cache.get(pid)
         if hit and time.time() - hit[0] < 3:
             return hit[1]
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True,
+                             **NO_WINDOW).stdout
         _pid_cache[pid] = (time.time(), str(pid) in out.split())
         return _pid_cache[pid][1]
     try:
@@ -138,7 +140,7 @@ def pid_alive(pid: int | None) -> bool:
 
 def kill_tree(pid: int) -> None:
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, **NO_WINDOW)
     else:
         try:
             os.killpg(os.getpgid(pid), signal.SIGTERM)
@@ -448,8 +450,8 @@ def launch(body: dict) -> tuple[int, dict]:
     env = {**os.environ, "PYTHONPATH": PKG_PARENT + os.pathsep + os.environ.get("PYTHONPATH", ""),
            "PYTHONIOENCODING": "utf-8"}
     kw: dict = {}
-    if os.name == "nt":  # detached: no console, own process group, survives the dashboard
-        kw["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+    if os.name == "nt":  # hidden console its children inherit, own process group, survives the dashboard
+        kw["creationflags"] = 0x00000200 | 0x08000000  # NEW_PROCESS_GROUP | NO_WINDOW (DETACHED would override it)
     else:
         kw["start_new_session"] = True
     with (CFG.runs / f"{name}.log").open("ab") as log:
@@ -1026,7 +1028,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 p = subprocess.run([sys.executable, "-m", "agentcontroller.usage", "--project", str(CFG.root), "--json"],
                                    capture_output=True, text=True, timeout=90, cwd=CFG.root,
-                                   env={**os.environ, "PYTHONPATH": PKG_PARENT})
+                                   env={**os.environ, "PYTHONPATH": PKG_PARENT}, **NO_WINDOW)
                 return self._json({"ok": p.returncode == 0, "output": p.stdout.strip()[:20000] or p.stderr.strip()[-2000:]})
             except (OSError, subprocess.SubprocessError) as e:
                 return self._json({"ok": False, "output": str(e)})

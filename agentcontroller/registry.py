@@ -16,6 +16,8 @@ import json
 import os
 import socket
 import subprocess
+
+from . import NO_WINDOW
 import sys
 import time
 from pathlib import Path
@@ -53,7 +55,7 @@ def main_checkout(path: str | Path) -> Path:
     p = Path(path).resolve()
     try:
         common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=p,
-                                capture_output=True, text=True, timeout=10).stdout.strip()
+                                capture_output=True, text=True, timeout=10, **NO_WINDOW).stdout.strip()
         if common:
             c = Path(common)
             return c.parent if c.name == ".git" else p
@@ -201,7 +203,7 @@ def ensure_dash(port: int | None = None) -> bool:
         return True
     if os.name == "nt":  # the logon task owns the process when it is installed (install.py --dash-task)
         try:
-            if subprocess.run(["schtasks", "/Run", "/TN", TASK_NAME], capture_output=True, timeout=10).returncode == 0:
+            if subprocess.run(["schtasks", "/Run", "/TN", TASK_NAME], capture_output=True, timeout=10, **NO_WINDOW).returncode == 0:
                 for _ in range(30):
                     if dash_up(port):
                         return True
@@ -215,7 +217,7 @@ def ensure_dash(port: int | None = None) -> bool:
     kw: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                 "close_fds": True}
     if os.name == "nt":
-        kw["creationflags"] = 0x08000000 | 0x00000200 | 0x00000008  # NO_WINDOW | NEW_PROCESS_GROUP | DETACHED
+        kw["creationflags"] = 0x08000000 | 0x00000200  # NO_WINDOW | NEW_PROCESS_GROUP (DETACHED would override NO_WINDOW)
     else:
         kw["start_new_session"] = True
     try:

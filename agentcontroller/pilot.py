@@ -24,6 +24,8 @@ import json
 import os
 import shutil
 import subprocess
+
+from . import NO_WINDOW
 import sys
 import time
 from datetime import datetime
@@ -89,7 +91,7 @@ def run_session(cmd: list[str], prompt: str, cfg: Config, env: dict, events: Eve
     err_path = Path(events.path.with_suffix("").with_suffix(".stderr.txt"))
     err = err_path.open("w", encoding="utf-8")
     proc = subprocess.Popen(cmd, cwd=cfg.root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=err, text=True, encoding="utf-8", errors="replace")
+                            stderr=err, text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
     proc.stdin.write(prompt)
     proc.stdin.close()
     for line in proc.stdout:
@@ -157,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         env["PATH"] = os.pathsep.join([*cfg.path_extra, env.get("PATH", "")])
     pid.write_text(str(os.getpid()))
     branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cfg.root, capture_output=True,
-                            text=True).stdout.strip() or None
+                            text=True, **NO_WINDOW).stdout.strip() or None
     events.write("start", model=model, budget=None, billing="plan", brief="agentpilot", worktree=str(cfg.root),
                  branch=branch, base=None)
     from . import registry

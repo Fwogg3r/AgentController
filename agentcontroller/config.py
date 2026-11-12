@@ -2,6 +2,8 @@
 
 import os
 import subprocess
+
+from . import NO_WINDOW
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -82,7 +84,7 @@ def find_project(start: Path | None = None) -> Path | None:
 def _main_checkout(root: Path) -> Path | None:
     try:
         common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root,
-                                capture_output=True, text=True, check=True).stdout.strip()
+                                capture_output=True, text=True, check=True, **NO_WINDOW).stdout.strip()
         return Path(common).parent
     except (subprocess.CalledProcessError, OSError):
         return None
