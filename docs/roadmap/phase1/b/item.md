@@ -1,7 +1,7 @@
 ---
 title: "agentdash: show local-model agents (aider on LM Studio) and every other agent in a project, with their own icon"
 status: done
-links: [phase1/d]
+links: [phase1/d, phase2/a, phase2/q]
 ---
 Owner request (2026-11-08): agentdash lists local-model agents and every other agent in a project, each with its own icon. Must-haves: context gauge and thinking shown live per agent.
 

@@ -1,7 +1,7 @@
 ---
 title: Message and answer Claude Code (plan) sessions from agentdash
 status: done
-links: [phase2/g]
+links: [phase2/ak]
 ---
 *Send to agent* (with attachments) works for a finished Claude Code session: agentdash starts `agentcontroller.resume`, which continues the session in place through the Agent SDK and the native Claude Code CLI (same session id and transcript, the user's settings, the plan login; ANTHROPIC_API_KEY is removed from its environment and a run that reports an API key source stops before any model call). Tool calls that would prompt in the Claude app pop up in the dashboard (Allow / Deny, also under Needs me and as a card in the transcript); AskUserQuestion is answered the same way. Follow-ups while the turn runs are queued into it; *Stop* ends agentdash's turn.
 

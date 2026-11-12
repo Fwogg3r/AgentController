@@ -1,7 +1,7 @@
 ---
 title: Messages with file attachments; AskUserQuestion answered from the dashboard
 status: done
-links: [phase2/g]
+links: []
 ---
 Composer: Attach button, paste or drop files (10 files, 20 MB). Saved to agent_runs/attachments/<run>/; the runner sends images and PDFs as content blocks, inlines text files up to 200 KB, and gives the path for anything else. The audit log records names and sizes only.
 

@@ -1,7 +1,7 @@
 ---
 title: "agentdash: run titles with the ID below, fast transcript loading"
 status: done
-links: [phase2/a]
+links: []
 ---
 Run header shows the session title with the run ID in small italics below (plan sessions; API runs keep their name).
 

@@ -1,7 +1,7 @@
 ---
 title: "First-run install: installer, agentdoctor, quick start"
 status: done
-links: [phase2/a]
+links: [phase2/ad]
 ---
 Fresh-machine install that ends in a working product. `install.py` now also installs the roadmap CLI (WebRoadmap, pinned commit 108eb29, asks first) and its skill, aider at pinned commit 253f036 with `--local`, checks for the Claude Code CLI (prints how to install it, never installs system software), and runs `agentdoctor` last; `--dry-run` prints the whole plan without cloning or writing.
 

@@ -1,6 +1,6 @@
 ---
 title: Worktree actions
 status: planned
-links: [phase2/a]
+links: []
 ---
 Per run: diff against main, open in editor, copy the resume command.
