@@ -208,7 +208,11 @@ The per-project features below apply as before.
 - **Questions:** when an API agent calls `AskUserQuestion`, the run shows *waiting · question*, the question pops up once as a
   dialog (options, multi-select, free-text *Other*), sits in the attention queue and appears as a card in the transcript.
   The answer goes back to the tool; *Stop* or 4 h without an answer denies it and the agent uses its own judgment.
-  Claude Code (plan) sessions are read-only: they can't be messaged or answered from the dashboard.
+- **Messaging Claude Code sessions:** *Send to agent* also continues a finished Claude Code session, billed to your plan:
+  `agentcontroller.resume` resumes it in place (same transcript, your settings and login, never an API key). Tool calls
+  that would prompt in the Claude app pop up in the dashboard for Allow / Deny; questions too. Over
+  `[dash] recache_warn_tokens` (default 100k) of context, the first message warns that the whole context will be
+  re-cached. Subagents and sessions still running in the Claude app can't be messaged.
 - **Removing:** per run and each behind a confirmation: stop gracefully, kill the process tree (spend so far is logged),
   remove from list (logs archived to `<runs>/archive/`), delete the worktree and branch. Deleting is offered only when the branch
   is merged into its base and clean; otherwise it shows the unmerged commits and the uncommitted count and needs an explicit

@@ -39,6 +39,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import access as acc_mod
 from . import NO_WINDOW, claude_sessions, hub, registry, roadmap_tool
+from . import resume as resume_mod
 from .config import CONFIG_NAME, Config, load
 
 PAGE = Path(__file__).resolve().parent / "static" / "index.html"
@@ -484,7 +485,7 @@ ATTACH_MAX = 20 << 20  # total bytes of files per message
 ATTACH_FILES = 10
 
 
-def save_attachments(name: str, files) -> tuple[list[dict], str | None]:
+def save_attachments(name: str, files, base: Path | None = None) -> tuple[list[dict], str | None]:
     """Files sent with a message ([{name, data: base64}]) -> agent_runs/attachments/<run>/; the runner inlines or links them."""
     if not files:
         return [], None
@@ -492,7 +493,7 @@ def save_attachments(name: str, files) -> tuple[list[dict], str | None]:
         return [], f"at most {ATTACH_FILES} files"
     import base64
     out, total = [], 0
-    d = CFG.runs / "attachments" / name
+    d = base or CFG.runs / "attachments" / name
     stamp = time.strftime("%Y%m%d-%H%M%S")
     for i, f in enumerate(files):
         if not isinstance(f, dict) or not isinstance(f.get("data"), str):
@@ -510,6 +511,144 @@ def save_attachments(name: str, files) -> tuple[list[dict], str | None]:
         path.write_bytes(data)
         out.append({"name": fname, "path": str(path), "bytes": len(data)})
     return out, None
+
+
+# ---- messaging Claude Code sessions (agentcontroller.resume continues them on the plan) ----
+RECACHE_WARN = 100_000  # tokens of context: resuming a session this big asks first (it is re-cached)
+
+
+def recache_warn_tokens() -> int:
+    try:
+        return int((hub.gconfig().get("dash") or {}).get("recache_warn_tokens") or RECACHE_WARN)
+    except (TypeError, ValueError):
+        return RECACHE_WARN
+
+
+def drive_alive(sid: str) -> bool:
+    try:
+        return pid_alive(int((resume_mod.state_dir(sid) / "pid").read_text().strip()))
+    except (OSError, ValueError):
+        return False
+
+
+def drive_pending(sid: str) -> dict | None:
+    """The approval or question the driver is waiting on (last one without its decision/answer)."""
+    open_: dict[str, dict] = {}
+    for e in read_jsonl(resume_mod.state_dir(sid) / "events.jsonl"):
+        k = e.get("kind")
+        if k in ("approval", "question"):
+            open_[e.get("id")] = e
+        elif k in ("decision", "answer"):
+            open_.pop(e.get("id"), None)
+        elif k == "drive_start":
+            open_.clear()
+    return list(open_.values())[-1] if open_ else None
+
+
+def _driven_sids() -> dict[str, str]:
+    """sid8 -> full sid for sessions agentdash is driving right now."""
+    out = {}
+    try:
+        for d in (registry.home() / "resume").iterdir():
+            if d.is_dir() and drive_alive(d.name):
+                out[d.name[:8]] = d.name
+    except OSError:
+        pass
+    return out
+
+
+def drive_overlay(rows: list[dict]) -> list[dict]:
+    """A session agentdash is driving is active; waiting while an approval or question is open."""
+    live = _driven_sids()
+    if not live:
+        return rows
+    out = []
+    for r in rows:
+        sid = live.get(r["name"][len(claude_sessions.PREFIX):]) if r.get("plan") and r.get("kind") == "plan" else None
+        if not sid:
+            out.append(r)
+            continue
+        r = {**r, "driven": True, "active": True, "outcome": None, "status": "running"}
+        pend = drive_pending(sid)
+        if pend and pend.get("kind") == "question":
+            qs = pend.get("questions") or []
+            first = qs[0].get("question") if qs and isinstance(qs[0], dict) else ""
+            r.update(state="waiting", activity={"kind": "question", "text": f"question: {first}"[:220], "since": pend.get("ts"),
+                                                "qid": pend.get("id"), "questions": qs})
+        elif pend:
+            r.update(state="waiting", activity={"kind": "approval", "text": f"approve {pend.get('tool')}: {pend.get('arg') or ''}"[:220],
+                                                "since": pend.get("ts"), "aid": pend.get("id"), "tool": pend.get("tool"), "arg": pend.get("arg"),
+                                                "detail": pend.get("detail")})
+        elif r.get("state") not in ("working", "waiting"):
+            r.update(state="working", activity={"kind": "thinking", "text": "", "since": r.get("last_activity")})
+        out.append(r)
+    return out
+
+
+def plan_inbox(key: str, name: str, body: dict) -> tuple[int, dict]:
+    """/api/inbox for a Claude Code session: feed the running driver, or start one (after the re-cache warning)."""
+    if len(name[len(claude_sessions.PREFIX):].split(".")) > 1:
+        return 409, {"ok": False, "error": "a subagent can't be messaged: message its session"}
+    path = next((f for d in plan_dirs(key, cfg_for(key)) if (f := claude_sessions.find_file(d, name))), None)
+    meta = claude_sessions.session_meta(path) if path else None
+    if not meta:
+        return 404, {"ok": False, "error": "session transcript not found"}
+    sid = meta["sid"]
+    sd = resume_mod.state_dir(sid)
+    inbox = sd / "inbox.jsonl"
+    alive = drive_alive(sid)
+    if body.get("control") == "stop" or "decision" in body or "answer" in body:
+        if not alive:
+            return 409, {"ok": False, "error": "agentdash isn't running this session right now"}
+        if body.get("control") == "stop":
+            append_jsonl(inbox, {"control": "stop", "ts": now()})
+        elif "decision" in body:
+            append_jsonl(inbox, {"decision": str(body["decision"]), "allow": bool(body.get("allow")), "ts": now(),
+                                 **({"message": str(body["message"])[:2000]} if body.get("message") else {})})
+        else:
+            if not isinstance(body.get("answers"), dict):
+                return 400, {"ok": False, "error": "need answers"}
+            append_jsonl(inbox, {"answer": str(body["answer"]), "ts": now(),
+                                 "answers": {str(k)[:2000]: str(v)[:4000] for k, v in body["answers"].items()}})
+        return 200, {"ok": True}
+    text = body.get("text").strip() if isinstance(body.get("text"), str) else ""
+    if not text and not body.get("files"):
+        return 400, {"ok": False, "error": "need text or files"}
+    if not alive:
+        if meta["state"] in ("working", "waiting"):
+            return 409, {"ok": False, "error": "this session is still running in the Claude app: message it there, "
+                                               "or wait until it finishes"}
+        if not meta["cwd"] or not Path(meta["cwd"]).is_dir():
+            return 409, {"ok": False, "error": "the session's working directory is gone"}
+        th = recache_warn_tokens()
+        if meta["context_tokens"] > th and not body.get("confirm_recache"):
+            return 409, {"ok": False, "need_confirm": True, "context_tokens": meta["context_tokens"], "threshold": th,
+                         "idle_seconds": round(time.time() - meta["mtime"]),
+                         "error": "large context: confirm the re-cache"}
+    files, err = save_attachments(name, body.get("files"), base=sd / "attachments" / time.strftime("%Y%m%d"))
+    if err:
+        return 400, {"ok": False, "error": err}
+    if alive:
+        line = {"text": text, "ts": now(), **({"files": files} if files else {})}
+        append_jsonl(inbox, line)
+        return 200, {"ok": True, "queued": True}
+    sd.mkdir(parents=True, exist_ok=True)
+    first = sd / f"first-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    first.write_text(json.dumps({"text": text, "files": files}, ensure_ascii=False), encoding="utf-8")
+    cmd = [sys.executable, "-m", "agentcontroller.resume", "--session", sid, "--cwd", meta["cwd"], "--first", str(first)]
+    if meta.get("model"):
+        cmd += ["--model", meta["model"]]
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # plan login only
+    kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
+    log = open(sd / "drive.log", "a", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(cmd, cwd=meta["cwd"], env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                stderr=subprocess.STDOUT, **kw)
+    finally:
+        log.close()
+    (sd / "pid").write_text(str(proc.pid))  # at once, so a quick second message is queued, not a second driver
+    _extra_cache.clear()
+    return 200, {"ok": True, "started": True, "context_tokens": meta["context_tokens"]}
 
 
 def stop_graceful(name: str) -> tuple[int, dict]:
@@ -754,7 +893,7 @@ def _sort(rows: list[dict]) -> list[dict]:
 
 
 def project_rows(key: str, plan: bool = True, age: float = claude_sessions.DEFAULT_AGE, git: bool = False) -> list[dict]:
-    return _sort(propagate_waiting([*api_part(key, git)[0], *extra_part(key, plan, age)]))
+    return _sort(propagate_waiting(drive_overlay([*api_part(key, git)[0], *extra_part(key, plan, age)])))
 
 
 def all_rows(plan: bool, age: float) -> list[dict]:
@@ -805,9 +944,14 @@ def attention() -> list[dict]:
                 out.append({**base, "kind": "approval", "text": f"approve? {a.get('summary') or a.get('id') or ''}"[:200],
                             "action": {"type": "local_approve", "run": r["name"], "id": a.get("id")}})
             act = r.get("activity") or {}
+            if r.get("state") == "waiting" and act.get("kind") == "approval" and act.get("aid"):
+                out.append({**base, "kind": "approval", "text": f"{r.get('title') or r['name']}: {act.get('text', '')}"[:200],
+                            "action": {"type": "approve", "run": r["name"], "id": act["aid"], "tool": act.get("tool"), "arg": act.get("arg"),
+                                       "detail": act.get("detail")}})
             if r.get("state") == "waiting" and act.get("kind") == "question":
-                out.append({**base, "kind": "question", "text": f"{r.get('title') or r['name']} asks: {act.get('text', '')[10:]}"[:200],
-                            "action": {"type": "question", "run": r["name"], "id": act.get("qid"),
+                where = " (answer it in the Claude app)" if act.get("app") else ""
+                out.append({**base, "kind": "question", "text": f"{r.get('title') or r['name']} asks: {act.get('text', '')[10:]}"[:200 - len(where)] + where,
+                            "action": {"type": "question", "run": r["name"], "id": act.get("qid"), "app": bool(act.get("app")),
                                        "questions": act.get("questions") or []}})
             if r.get("state") == "crashed" and (r.get("idle_seconds") or 0) < 86400:
                 out.append({**base, "kind": "crashed", "text": f"{r.get('title') or r['name']} crashed"[:200]})
@@ -1328,6 +1472,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
         if not name:
             return self._json({"ok": False, "error": "bad run"}, 400)
+        if u.path == "/api/inbox" and name.startswith(claude_sessions.PREFIX):
+            code, res = plan_inbox(key, name, body)
+            return self._json(res, code)
         if u.path == "/api/inbox":
             if not run_info(name, [], git_info=False)["active"]:
                 return self._json({"ok": False, "error": "run is not running"}, 409)
@@ -1410,7 +1557,8 @@ class Handler(BaseHTTPRequestHandler):
             for d in plan_dirs(key, cfg_for(key)):
                 f = claude_sessions.find_file(d, name)
                 if f:
-                    return [{"mode": "plan", "path": f}]
+                    drv = resume_mod.state_dir(f.stem) / "events.jsonl"  # approvals/questions from agentdash's turns
+                    return [{"mode": "plan", "path": f}] + ([{"mode": "jsonl", "path": drv}] if "." not in name[5:] else [])
         api = CFG.runs / f"{name}.events.jsonl"
         if not api.exists():
             ld = hub.local_dir(key, name)

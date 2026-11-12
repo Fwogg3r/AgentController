@@ -162,13 +162,16 @@ details.tool summary { cursor:pointer; list-style:none; white-space:nowrap; over
 .qcard { border:1px solid var(--accent); border-radius:10px; padding:8px 10px; margin:6px 0; background:var(--card); }
 .qcard.done { border-color:var(--line); opacity:.85; }
 .qcard .qh { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--accent); margin-top:6px; }
-.qcard .qq { font-weight:600; margin:2px 0 6px; white-space:pre-wrap; }
+.qcard .qq { font-weight:600; margin:2px 0 6px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .qcard .qo { display:flex; gap:8px; align-items:flex-start; padding:4px 6px; border-radius:6px; cursor:pointer; }
 .qcard .qo:hover { background:var(--user); }
+.qcard .qo.ro { cursor:default; } .qcard .qo.ro:hover { background:none; }
 .qcard .qo small { display:block; color:var(--muted); }
 .qcard .qo input { all:revert; flex:none; margin:3px 0 0; accent-color:var(--accent); }
 .qcard .qo > div { flex:1; min-width:0; text-align:left; }
 .qcard input[type=text] { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; margin-top:4px; box-sizing:border-box; }
+.sys.err { color:var(--bad); }
+.qcard pre { white-space:pre-wrap; word-break:break-all; max-height:240px; overflow:auto; font-size:12px; }
 .qcard .qa { color:var(--ok); white-space:pre-wrap; margin-top:4px; }
 #qdlg { width:min(560px, calc(100vw - 20px)); }
 #files { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
@@ -711,7 +714,7 @@ function actLine(r, a) {
     case "writing": return [(a.text && a.text.startsWith("writing ") ? "Preparing " + a.text.slice(8) : "Writing") + "…", meta];
     case "tool": return ["Running " + a.text + "…", meta];
     case "task": return ["Waiting for " + (a.text || "").replace(/^waiting for /i, ""), `(${el_})`];
-    case "approval": return [a.text || "waiting for approval", `(${el_})`];
+    case "approval": if (r.plan) return ["Waiting for your approval: " + (a.text || "").replace(/^approve\s*/, ""), `(${el_})`]; return [a.text || "waiting for approval", `(${el_})`];
     case "question": return ["Waiting for your answer: " + (a.text || "").replace(/^question:?\s*/, ""), `(${el_})`];
     case "notification": case "inbox": case "rate_limit": case "retry": return ["Waiting: " + a.text, `(${el_})`];
     default: return [a.text || a.kind, ""];
@@ -1014,7 +1017,13 @@ function drawRunHead() {
   body.append(act);
   h.append(ic, body, el("span", "rhx", "\u25BE"));
   if (r.local) drawLocalStatic(r);
-  $("#send").disabled = $("#stop").disabled = $("#attach").disabled = !live || !!r.plan;
+  const canPlan = !!r.plan && r.kind === "plan" && (!r.active || r.driven);
+  $("#send").disabled = $("#attach").disabled = r.plan ? !canPlan : !live;
+  $("#stop").disabled = r.plan ? !r.driven : !live;
+  $("#text").placeholder = r.plan ? (r.kind !== "plan" ? "Subagents can't be messaged: message their session."
+    : canPlan ? "Continue this Claude Code session (billed to your plan; tool approvals pop up here)."
+    : "This session is running in the Claude app: message it there, or wait until it finishes.")
+    : "Message for the selected run (or text to forward). Click a line to select it for forwarding.";
 }
 async function fetchGit(project, name) {   // /api/runs?p=* skips git info; the per-project call has it
   const r = allRuns.find(x => x.project === project && x.name === name);
@@ -1027,7 +1036,7 @@ function select(project, name, auto) {
   if (typeof project === "object") { name = project.name; project = project.project; }
   if (!auto && isMob()) openDetail();
   if (sel !== ALL && sel !== project) { sel = project; LS.set("project", sel); loadCfg(); loadSpend(); }
-  current = { project, name }; selBubble = null; openTools = {}; qCards = {}; toolQueue = []; stick = true; lastTop = 0;
+  current = { project, name }; selBubble = null; openTools = {}; qCards = {}; appQ = {}; driverQ = {}; toolQueue = []; stick = true; lastTop = 0;
   if (es) es.close();
   $("#stream").textContent = ""; resetLocal();
   setTab("agents");
@@ -1175,10 +1184,24 @@ function render(e) {
       add(line("user", ">", (e.text || "") + fl, e.ts)); bump(e, { kind: "user", text: e.text }); break;
     }
     case "question": {
+      const key = qKey(e.questions);
+      if (e.app) {   // asked in the Claude app (from the transcript): shown, answered there
+        if (driverQ[key]) break;   // agentdash's own turn: its answerable card is already here
+        const card = appQuestionCard(e.questions || []); qCards[e.id] = card; appQ[key] = card; add(card); break;
+      }
+      if (appQ[key] && !appQ[key].classList.contains("done")) { appQ[key].remove(); delete appQ[key]; }
       const r = curRun(), card = questionForm(r && r.project, r && r.name, e.id, e.questions || []);
-      qCards[e.id] = card; add(card); break;
+      driverQ[key] = card; qCards[e.id] = card; add(card); break;
     }
     case "answer": { const c = qCards[e.id]; if (c) markAnswered(c, e); break; }
+    case "approval": {
+      const r = curRun(), card = approvalForm(r && r.project, r && r.name, e.id, e.tool, e.arg, e.detail);
+      qCards[e.id] = card; add(card); break;
+    }
+    case "decision": { const c = qCards[e.id]; if (c) markDecided(c, e); break; }
+    case "drive_start": add(el("div", "sys", "\u21BB continued from agentdash (billed to the plan)")); loadRuns(); break;
+    case "drive_end": closeOpenTools(); add(el("div", "sys", "agentdash's turn ended")); loadRuns(); break;
+    case "error": add(el("div", "sys err", "error: " + (e.text || "?"))); break;
     case "thinking": {
       const d = el("details", "think");
       d.append(el("summary", "", "✻ Thinking…"), el("div", "", e.text));
@@ -1196,6 +1219,7 @@ function render(e) {
       break;
     }
     case "tool_result": {
+      if (e.id && qCards[e.id]?.classList.contains("appq")) { markAppAnswered(qCards[e.id], e.text); break; }
       const blk = (e.id && openTools[e.id]) || toolQueue.shift();
       if (e.id) delete openTools[e.id];
       if (blk) {
@@ -1354,6 +1378,28 @@ function questionForm(project, run, qid, questions, onDone) {
   bx.append(ok, st); card.append(bx);
   return card;
 }
+let appQ = {}, driverQ = {};   // question cards by their text: transcript copies vs agentdash's answerable ones
+const qKey = qs => (qs || []).map(q => q.question || "").join("\n");
+function appQuestionCard(questions, title) {   // read-only: the Claude app holds this prompt
+  const card = el("div", "qcard appq");
+  card.append(el("div", "sys", "? asked in the Claude app" + (title ? " · " + title : "") + ": answer it there (open this session in the app)"));
+  for (const q of questions) {
+    if (q.header) card.append(el("div", "qh", q.header));
+    card.append(el("div", "qq", q.question || ""));
+    for (const o of q.options || []) {
+      const row = el("div", "qo ro"), t = el("div");
+      t.append(el("span", "", (q.multiSelect ? "\u2610 " : "\u25CB ") + o.label)); if (o.description) t.append(el("small", "", o.description));
+      row.append(t); card.append(row);
+    }
+  }
+  return card;
+}
+function markAppAnswered(card, text) {
+  if (card.classList.contains("done")) return;
+  card.classList.add("done");
+  const pairs = [...String(text || "").matchAll(/"="([^"]*)"/g)].map(m => "\u2192 " + m[1]);   // "question"="answer"
+  card.append(el("div", "qa", pairs.length ? pairs.join("\n") : (text || "(answered)")));
+}
 function markAnswered(card, e) {
   if (card.classList.contains("done")) return;
   card.classList.add("done");
@@ -1362,16 +1408,46 @@ function markAnswered(card, e) {
   card.append(el("div", "qa", a));
   rememberQ(e.id);
 }
-function popQuestions() {   // a new question from any run pops up once, like Claude's own question prompt
+function approvalForm(project, run, id, tool, arg, detail, onDone) {   // a tool call waiting for the owner
+  const card = el("div", "qcard");
+  card.append(el("div", "sys", "? permission needed"), el("div", "qq", (tool || "tool") + (arg ? ": " + arg : "")));
+  if (detail) { const d = el("details"); d.append(el("summary", "", "full input"), el("pre", "", detail)); card.append(d); }
+  const bx = el("div", "actions"), st = el("span", "hint");
+  const decide = allow => async () => {
+    bx.querySelectorAll("button").forEach(b => b.disabled = true);
+    const res = await post("/api/inbox", { p: project, run }, { decision: id, allow });
+    if (res.ok === false) { bx.querySelectorAll("button").forEach(b => b.disabled = false); st.textContent = "Failed: " + (res.error || "?"); return; }
+    st.textContent = allow ? "Allowed." : "Denied."; rememberQ(id);
+    if (onDone) onDone();
+    loadRuns(); loadAttention();
+  };
+  const y = el("button", "primary sm need-operate", "Allow"), n = el("button", "danger sm need-operate", "Deny");
+  y.onclick = decide(true); n.onclick = decide(false);
+  bx.append(y, n, st); card.append(bx);
+  return card;
+}
+function markDecided(card, e) {
+  if (card.classList.contains("done")) return;
+  card.classList.add("done");
+  card.querySelectorAll("button").forEach(x => x.disabled = true);
+  card.append(el("div", "qa", e.cancelled ? "(no decision: stopped or timed out)" : e.allow ? "\u2192 allowed" : "\u2192 denied"));
+  rememberQ(e.id);
+}
+function popQuestions() {   // a new question or approval from any run pops up once, like Claude's own prompts
   const dlg = $("#qdlg");
   if (dlg.open) return;
-  const a = attention.find(x => x.kind === "question" && x.action && x.action.id && !qSeen.has(x.action.id));
+  const a = attention.find(x => (x.kind === "question" || (x.kind === "approval" && x.action?.type === "approve")) && x.action && x.action.id && !qSeen.has(x.action.id));
   if (!a) return;
   const body = $("#qdlg-body"); body.textContent = "";
   const run = allRuns.find(r => r.project === a.project && r.name === a.run);
   const head = el("div"); head.append(el("b", "", run?.title || a.run), " · " + (a.project_name || run?.project_name || projects.find(p => p.key === a.project)?.name || ""));
   const close = () => { rememberQ(a.action.id); dlg.close(); setTimeout(popQuestions, 300); };
-  const form = questionForm(a.project, a.run, a.action.id, a.action.questions || [], close);
+  let form;
+  if (a.kind === "approval") form = approvalForm(a.project, a.run, a.action.id, a.action.tool, a.action.arg, a.action.detail, close);
+  else if (a.action.app) {
+    form = appQuestionCard(a.action.questions || []);
+    const bx = el("div", "actions"), ok = el("button", "primary sm", "OK"); ok.onclick = close; bx.append(ok); form.append(bx);
+  } else form = questionForm(a.project, a.run, a.action.id, a.action.questions || [], close);
   const open = el("button", "sm", "Open run"); open.onclick = () => { close(); select(a.project, a.run); };
   const later = el("button", "sm", "Later"); later.title = "stays in the attention list"; later.onclick = close;
   form.querySelector(".actions").append(open, later);
@@ -1419,14 +1495,27 @@ $("#send").onclick = async () => {
     armTimer = setTimeout(disarm, 5000); return;
   }
   disarm();
-  const files = pending.map(f => ({ name: f.name, data: f.data }));
-  const r = await post("/api/inbox", { p: current.project, run: current.name }, files.length ? { text: t, files } : { text: t });
-  $("#hint").textContent = r.ok ? "Queued: delivered at next turn" + (files.length ? ` with ${files.length} file(s).` : ".") : "Failed: " + r.error;
-  if (r.ok) { $("#text").value = ""; pending = []; drawFiles(); }
+  await sendMsg(t, false);
 };
+async function sendMsg(t, confirmRecache) {
+  const files = pending.map(f => ({ name: f.name, data: f.data })), cur = current, plan = curRun()?.plan;
+  const body = { text: t, ...(files.length ? { files } : {}), ...(confirmRecache ? { confirm_recache: true } : {}) };
+  const r = await post("/api/inbox", { p: cur.project, run: cur.name }, body);
+  if (r.need_confirm) {   // the failsafe: resuming re-caches the whole context
+    const idle = r.idle_seconds >= 3600 ? +(r.idle_seconds / 3600).toFixed(1) + " h" : Math.round(r.idle_seconds / 60) + " min";
+    return confirmThen(`Re-cache ${ktok(r.context_tokens)} tokens?`,
+      `This session's context is ${ktok(r.context_tokens)} tokens (your warning threshold is ${ktok(r.threshold)}), and it has been idle for ${idle}. ` +
+      "Continuing it from here re-caches that whole context on the first turn, which counts against your plan's usage limits. " +
+      "Follow-ups while it runs reuse the cache.", () => sendMsg(t, true), "Send anyway");
+  }
+  $("#hint").textContent = !r.ok ? "Failed: " + r.error
+    : plan ? (r.started ? "Continuing the session: the reply appears below." : "Queued for the running turn.")
+    : "Queued: delivered at next turn" + (files.length ? ` with ${files.length} file(s).` : ".");
+  if (r.ok) { $("#text").value = ""; pending = []; drawFiles(); loadRuns(); }
+}
 function disarm() { clearTimeout(armTimer); const b = $("#send"); b.classList.remove("armed"); b.textContent = "Send to agent"; }
 $("#stop").onclick = async () => {
-  if (!current || !confirm("Stop " + current.name + " after its current turn?")) return;
+  if (!current || !confirm((curRun()?.plan ? "Stop agentdash's turn in " : "Stop ") + current.name + (curRun()?.plan ? "?" : " after its current turn?"))) return;
   const r = await post("/api/inbox", { p: current.project, run: current.name }, { control: "stop" });
   $("#hint").textContent = r.ok ? "Stop requested: ends after this turn." : "Failed: " + r.error;
 };
@@ -1681,6 +1770,17 @@ function drawAttention() {
       else if (a.run) select(a.project, a.run);
       else if (a.project) selectProject(a.project);
     };
+    if (ac && ac.type === "approve") {
+      const bx = el("div", "actions");
+      const decide = allow => async ev => {
+        ev.stopPropagation();
+        const res = await post("/api/inbox", { p: a.project, run: ac.run }, { decision: ac.id, allow });
+        if (res.ok === false) alert(res.error || "failed");
+        rememberQ(ac.id); loadRuns(); loadAttention();
+      };
+      const y = el("button", "primary sm need-operate", "Allow"), n = el("button", "danger sm need-operate", "Deny");
+      y.onclick = decide(true); n.onclick = decide(false); bx.append(y, n); b.append(bx);
+    }
     if (ac && ac.type === "local_approve") {
       const bx = el("div", "actions");
       const decide = approve => async ev => {

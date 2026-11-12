@@ -165,11 +165,38 @@ class T(unittest.TestCase):
         r = cs.list_runs(self.d, now=time.time() + 3600)[0]
         self.assertEqual((r["state"], r["bg_tasks"]), ("finished", 0))
 
+    def test_background_notice_only_in_request_record(self):
+        """Subagents: the notice is logged only inside the next request's record, the start may be auto-backgrounded."""
+        done = asst("m1", [{"type": "text", "text": "waiting"}])
+        done["message"]["stop_reason"] = "end_turn"
+        bash = lambda tid: {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "bench"}}
+        res = lambda tid, text: {"type": "tool_result", "tool_use_id": tid, "content": text}
+        write(self.main, [user("go"), asst("m0", [bash("t1"), bash("t2"), bash("t3")]),
+                          user([res("t1", "Command was moved to the background (ID: bm1) after running for 180s."),
+                                res("t2", "Command running in background with ID: bm2."),
+                                res("t3", "Command running in background with ID: bm3.")]), done])
+        later = time.time() + 600
+        self.assertEqual(cs.list_runs(self.d, now=later)[0]["bg_tasks"], 3)
+        blob = {"type": "api-request-blob", "message": {"content": [{"type": "text", "text":
+                "<task-notification>\n<task-id>bm1</task-id>\n<status>completed</status>\n</task-notification>"}]}}
+        stop = asst("m2", [{"type": "tool_use", "id": "t4", "name": "TaskStop", "input": {"task_id": "bm2"}}])
+        write(self.main, [blob, stop, user([res("t4", "stopped")]), done])
+        r = cs.list_runs(self.d, now=later)[0]
+        self.assertEqual((r["state"], r["bg_tasks"]), ("waiting", 1))
+        write(self.main, [asst("m3", [{"type": "tool_use", "id": "t5", "name": "SubagentHandback", "input": {}}]),
+                          user([res("t5", "delivered")]), done])
+        r = cs.list_runs(self.d, now=later)[0]
+        self.assertEqual((r["state"], r["bg_tasks"]), ("finished", 0))
+
     def test_question_is_waiting(self):
         ask = {"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": [{"question": "Ship?"}]}}
         write(self.main, [user("go"), asst("m0", [ask])])
         r = cs.list_runs(self.d, now=time.time() + 3 * 3600)[0]   # past PENDING_IDLE, still waiting on the owner
         self.assertEqual((r["state"], r["activity"]["kind"]), ("waiting", "question"))
+        self.assertEqual((r["activity"]["app"], r["activity"]["qid"]), (True, "q1"))
+        self.assertEqual(r["activity"]["questions"], [{"question": "Ship?"}])
+        evs = cs.to_events(asst("m0", [ask]), [1])
+        self.assertEqual([(e["kind"], e["id"], e["app"]) for e in evs], [("question", "q1", True)])
 
     def test_project_dir(self):
         root = Path("C:/Users/X/Doc/My_Proj")

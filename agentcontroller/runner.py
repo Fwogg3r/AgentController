@@ -320,8 +320,8 @@ class Session:
     after the last one ends it waits for the notification turn's result.
     """
 
-    def __init__(self, brief: str, inbox: Path, events: EventLog):
-        self.brief, self.inbox, self.events = brief, inbox, events
+    def __init__(self, brief: str, inbox: Path, events: EventLog, first_files: list[dict] | None = None):
+        self.brief, self.inbox, self.events, self.first_files = brief, inbox, events, first_files
         self.pending = 0
         self.stop = False
         self.idle_since: float | None = None
@@ -364,7 +364,7 @@ class Session:
 
     async def prompts(self):
         self.pending = 1
-        yield user_msg(self.brief)
+        yield user_msg(self.brief, self.first_files)
         while not self.done:
             await asyncio.sleep(1.0)
             for item in self._new_lines():

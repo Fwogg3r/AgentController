@@ -26,8 +26,12 @@ DEFAULT_AGE = 7 * 86400
 MAX_SESSIONS = 40
 PREFIX = "plan."
 _LOCK = threading.Lock()
-_BG_START = re.compile(r"Command running in background with ID: (\w+)|Async agent launched successfully.*?agentId: (\w+)", re.S)
+_BG_START = re.compile(r"Command running in background with ID: (\w+)|moved to the background \(ID: (\w+)\)"
+                       r"|Async agent launched successfully.*?agentId: (\w+)", re.S)
 _BG_NOTE = re.compile(r"<task-id>(\w+)</task-id>.*?<status>(\w+)</status>", re.S)
+_ANSWERED = re.compile(r"(Your questions have been answered|User has answered your questions)")  # AskUserQuestion results: kept whole
+_DONE_TOOLS = {"SubagentHandback"}             # the agent handed its result back: it is finished, whatever it left running
+_STOP_TOOLS = {"TaskStop", "KillShell", "KillBash"}
 
 
 def slug_of(root: Path) -> str:
@@ -114,12 +118,27 @@ class Parsed:
     last_text: str = ""
     turn_done: bool = False  # the last assistant message ended the turn: idle, however recently it was written
     bg: dict = field(default_factory=dict)  # background task id -> "Tool: arg", until its task-notification arrives
+    bg_done: set = field(default_factory=set)  # ids whose notification was seen (it can be logged before the start)
+    handed_back: bool = False
+    cwd: str | None = None
+    questions: dict = field(default_factory=dict)  # open AskUserQuestion tool id -> its questions
+    ctx: int = 0  # context size of the last model call (input + cache read + cache write): what a resume re-caches
+
+    def notes(self, raw: str) -> None:
+        """Task notifications, wherever they are logged: as a user line, inside a queued command, or (subagents)
+        only in the api-request records that carry the next request."""
+        for tid, status in _BG_NOTE.findall(raw):
+            if status != "running":
+                self.bg.pop(tid, None)
+                self.bg_done.add(tid)
 
     def feed(self, e: dict) -> None:
         ts = e.get("timestamp")
         if isinstance(ts, str):
             self.first_ts = self.first_ts or ts
             self.last_ts = ts
+        if not self.cwd and isinstance(e.get("cwd"), str):
+            self.cwd = e["cwd"]
         msg = e.get("message")
         if not isinstance(msg, dict):
             return
@@ -137,10 +156,20 @@ class Parsed:
                 if old:
                     self._add(*old, sign=-1)
                 self.msgs[mid] = (model, usage)
+                self.ctx = sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
+                                                                 "cache_creation_input_tokens"))
                 self._add(model, usage, sign=1)
             for b in content if isinstance(content, list) else []:
                 if not isinstance(b, dict):
                     continue
+                if b.get("type") == "tool_use" and b.get("name") in _DONE_TOOLS:
+                    self.bg.clear()
+                    self.handed_back = True
+                elif b.get("type") == "tool_use" and b.get("name") in _STOP_TOOLS and isinstance(b.get("input"), dict):
+                    inp = b["input"]
+                    self.bg.pop(str(inp.get("task_id") or inp.get("shell_id") or inp.get("bash_id") or ""), None)
+                if b.get("type") == "tool_use" and b.get("name") == "AskUserQuestion" and isinstance(b.get("input"), dict):
+                    self.questions[b.get("id")] = b["input"].get("questions") or []
                 if b.get("type") == "tool_use" and b.get("id") not in self.tool_ids:
                     self.tool_ids.add(b.get("id"))
                     self.tool_calls += 1
@@ -155,14 +184,13 @@ class Parsed:
             for b in content if isinstance(content, list) else []:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     call = self.pending.pop(b.get("tool_use_id"), None)
+                    self.questions.pop(b.get("tool_use_id"), None)
                     c = b.get("content")
                     m = _BG_START.search(c if isinstance(c, str) else _text_of(c))
-                    if m:  # run_in_background Bash or a background agent: done when its notification arrives
-                        self.bg[m.group(1) or m.group(2)] = f"{call[0]}: {call[1]}" if call else "background task"
-            if self.bg and "<task-notification>" in (raw := content if isinstance(content, str) else _text_of(content)):
-                for tid, status in _BG_NOTE.findall(raw):
-                    if status != "running":
-                        self.bg.pop(tid, None)
+                    if m and not self.handed_back:  # background Bash / agent: done when its notification arrives
+                        tid = next(g for g in m.groups() if g)
+                        if tid not in self.bg_done:
+                            self.bg[tid] = f"{call[0]}: {call[1]}" if call else "background task"
             if _is_prompt(e):
                 # shown on the card until the model starts answering
                 self.last_kind, self.last_text = "user", _first_line(_prompt_text(content), 160)
@@ -197,6 +225,8 @@ class Parsed:
             end = chunk.rfind(b"\n") + 1  # a half-written last line is picked up next time
             self.offset += end
             for raw in chunk[:end].splitlines():
+                if b"<task-notification>" in raw:
+                    self.notes(raw.decode("utf-8", "replace").replace("\\n", "\n"))
                 try:
                     e = json.loads(raw)
                 except ValueError:
@@ -256,7 +286,10 @@ def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, no
     question = next((a for n, a in p.pending.values() if n == "AskUserQuestion"), None)
     waiting = idle < BG_IDLE and (question is not None or (not running and bool(p.bg)))
     if waiting and question is not None:
-        act = {"kind": "question", "text": f"question: {question}".strip(" :")}
+        qid = next((i for i, (n, _a) in p.pending.items() if n == "AskUserQuestion"), None)
+        # asked inside the Claude app: only the app can answer it (agentdash's own turns ask through their driver)
+        act = {"kind": "question", "text": f"question: {question}".strip(" :"), "app": True, "qid": qid,
+               "questions": p.questions.get(qid) or []}
     elif waiting:
         descs = list(p.bg.values())
         act = {"kind": "task", "text": f"background task{'s' if len(descs) > 1 else ''}: " + "; ".join(descs)[:200]}
@@ -278,7 +311,7 @@ def _summary(name: str, kind: str, p: Parsed, title: str, parent: str | None, no
     return {
         "name": name, "kind": kind, "parent": parent, "title": title or name, "plan": True,
         "model": model, "cost": round(p.tot["usd"], 4), "cost_estimate": True, "turns": len(p.msgs),
-        "tool_calls": p.tool_calls, "tokens_in": p.tot["in"], "tokens_out": p.tot["out"],
+        "tool_calls": p.tool_calls, "context_tokens": p.ctx, "tokens_in": p.tot["in"], "tokens_out": p.tot["out"],
         "cache_read": p.tot["cr"], "cache_write": p.tot["cw"],
         "state": state, "outcome": None if running else "success", "bg_tasks": len(p.bg),
         "active": running, "activity": act if running else None,
@@ -381,7 +414,7 @@ def to_events(e: dict, first_prompt: list) -> list[dict]:
                 c = b.get("content")
                 text = c if isinstance(c, str) else _text_of(c)
                 out.append({"kind": "tool_result", "id": b.get("tool_use_id"), "ok": not b.get("is_error"),
-                            "text": text.strip()[:400], "ts": ts})
+                            "text": text.strip()[:4000 if _ANSWERED.match(text.strip()) else 400], "ts": ts})
         return out
     for b in content if isinstance(content, list) else []:
         if not isinstance(b, dict):
@@ -392,7 +425,21 @@ def to_events(e: dict, first_prompt: list) -> list[dict]:
         elif k == "thinking":
             # newer models record only a signature: show the (collapsed) block empty rather than hide that it happened
             out.append({"kind": "thinking", "text": b.get("thinking") or "(thinking not recorded)", "ts": ts})
+        elif k == "tool_use" and b.get("name") == "AskUserQuestion" and isinstance(b.get("input"), dict):
+            out.append({"kind": "question", "id": b.get("id"), "app": True, "ts": ts,
+                        "questions": b["input"].get("questions") or []})
         elif k == "tool_use":
             out.append({"kind": "tool", "id": b.get("id"), "name": b.get("name", "?"),
                         "arg": tool_arg(b.get("name", ""), b.get("input")), "ts": ts})
     return out
+
+
+def session_meta(path: Path) -> dict | None:
+    """What agentdash needs to continue a session: full id, working dir, model, context size, last write."""
+    with _LOCK:
+        p = _parsed(path)
+    if p is None:
+        return None
+    st = _summary(PREFIX + path.stem[:8], "plan", p, "", None, time.time())["state"]
+    return {"sid": path.stem, "cwd": p.cwd, "model": p.model, "context_tokens": p.ctx, "mtime": p.mtime,
+            "turn_done": p.turn_done, "state": st}
