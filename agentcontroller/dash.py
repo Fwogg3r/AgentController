@@ -17,6 +17,7 @@ import argparse
 import codecs
 import contextlib
 import contextvars
+import hashlib
 import hmac
 import json
 import os
@@ -24,9 +25,13 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -800,6 +805,76 @@ def roadmap_for(key: str, fresh: bool = False) -> dict:
     return data
 
 
+# ---------- WebRoadmap's own page, proxied under /rmui/<id>/ ----------
+# One `roadmap serve` per project on a loopback port, started on first use and stopped with the dashboard. Proxying
+# (instead of linking to its port) keeps it behind this server's auth (LAN token, Cloudflare Access) and same-origin.
+_rm_servers: dict[str, tuple[subprocess.Popen, int]] = {}
+_rm_lock = threading.Lock()
+
+
+def rm_id(key: str) -> str:
+    """A URL-safe id for a project key (keys are normalised paths)."""
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def _rm_key(rid: str) -> str | None:
+    return next((k for k in projects_map() if rm_id(k) == rid), None)
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def rm_server(key: str) -> tuple[int | None, str | None]:
+    """The loopback port of this project's `roadmap serve`, starting it if needed; (None, error) when it can't."""
+    with _rm_lock:
+        hit = _rm_servers.get(key)
+        if hit and hit[0].poll() is None:
+            return hit[1], None
+        rdir = Path(projects_map()[key]["path"]) / "docs" / "roadmap"
+        if not (rdir / "roadmap.md").is_file():
+            return None, "this project has no docs/roadmap (create one with `roadmap init`)"
+        exe = shutil.which("roadmap")
+        if not exe:
+            return None, "the `roadmap` CLI isn't installed: uv tool install git+https://github.com/Fwogg3r/WebRoadmap"
+        port = _free_port()
+        try:
+            proc = subprocess.Popen([exe, "--dir", str(rdir), "serve", "--host", "127.0.0.1", "--port", str(port)],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    **NO_WINDOW)
+        except OSError as e:
+            return None, f"roadmap serve failed: {e}"
+        for _ in range(50):
+            if proc.poll() is not None:
+                return None, f"roadmap serve exited ({proc.returncode})"
+            with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                _rm_servers[key] = (proc, port)
+                return port, None
+            time.sleep(0.1)
+        proc.kill()
+        return None, "roadmap serve did not start within 5 s"
+
+
+def rm_stop_all() -> None:
+    for proc, _ in list(_rm_servers.values()):
+        with contextlib.suppress(OSError):
+            proc.kill()
+    _rm_servers.clear()
+
+
+def rm_fix(name: str, body: bytes) -> bytes:
+    """WebRoadmap's app.js calls absolute /api/... paths; make them relative to /rmui/<id>/ and add the X-AC header
+    this server's POST check wants. A no-op on text that is already relative."""
+    if name != "app.js":
+        return body
+    t = body.decode("utf-8").replace('fetch("/api/', 'fetch("api/')
+    t = t.replace('headers: { "Content-Type": "application/json" }',
+                  'headers: { "Content-Type": "application/json", "X-AC": "1" }')
+    return t.encode("utf-8")
+
+
 def _clear_caches() -> None:
     global _pm_cache
     _pm_cache = (0.0, {})
@@ -1001,6 +1076,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._project(q, p):
                 return
             return self._json(_sort(propagate_waiting([*api_part(p, True)[0], *extra_part(p, plan, age)])))
+        if u.path == "/rmui" or u.path.startswith("/rmui/"):
+            return self._rmui("GET", u, q)
         if u.path == "/api/spend":
             p = (q.get("p") or [""])[0] or PINNED or "*"
             if p == "*":
@@ -1040,6 +1117,8 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
+        if u.path.startswith("/rmui/"):
+            return self._rmui("POST", u, q)
         body = self._abody = self._body()
         if u.path == "/api/forget_project":
             key = body.get("p")
@@ -1090,6 +1169,52 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/worktree_delete":
             return reply(worktree_delete(name, bool(body.get("discard"))))
         self._json({"ok": False, "error": "not found"}, 404)
+
+    def _rmui(self, method: str, u, q: dict):
+        """/rmui/?p=<key> redirects to /rmui/<id>/; /rmui/<id>/<rest> is proxied to that project's `roadmap serve`."""
+        if u.path in ("/rmui", "/rmui/"):
+            key = (q.get("p") or [""])[0] or PINNED or ""
+            if key not in projects_map():
+                return self._json({"ok": False, "error": "unknown project"}, 404)
+            self._status = 302
+            self.send_response(302)
+            self.send_header("Location", f"/rmui/{rm_id(key)}/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        rid, _, rest = u.path[len("/rmui/"):].partition("/")
+        key = _rm_key(rid)
+        if key is None:
+            return self._json({"ok": False, "error": "unknown project"}, 404)
+        if method == "POST" and not rest.startswith("api/"):
+            return self._json({"ok": False, "error": "not found"}, 404)
+        port, err = rm_server(key)
+        if port is None:
+            return self._send(502, f"<!doctype html><p>{err}</p>".encode("utf-8"), "text/html")
+        body = self._body_raw() if method == "POST" else None
+        if method == "POST":
+            self._abody = {"rmui": rest}
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/{rest}" + (f"?{u.query}" if u.query else ""),
+                                     data=body, method=method,
+                                     headers={"Content-Type": "application/json"} if body is not None else {})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 (our own loopback child)
+                code, data, ctype = r.status, r.read(), r.headers.get("Content-Type", "application/octet-stream")
+        except urllib.error.HTTPError as e:
+            code, data, ctype = e.code, e.read(), e.headers.get("Content-Type", "application/json")
+        except OSError as e:
+            return self._json({"ok": False, "error": f"roadmap serve unreachable: {e}"}, 502)
+        data = rm_fix(rest, data)
+        if self._scrub and rest == "api/roadmap" and code == 200:  # the folder path is admin-only, as elsewhere
+            with contextlib.suppress(ValueError):
+                obj = json.loads(data)
+                obj.pop("root", None)
+                data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        return self._send(code, data, ctype.split(";")[0])
+
+    def _body_raw(self) -> bytes:
+        n = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(min(n, 1 << 20)) if n else b"{}"
 
     def _sources(self, key: str, name: str) -> list[dict]:
         """What to tail for a run: Claude transcript (any of the project's dirs), API events file, or a local run."""
@@ -1234,7 +1359,6 @@ def main(argv: list[str] | None = None) -> int:
                   "the token", flush=True)
     srv = ThreadingHTTPServer((args.host, port), Handler)
     srv.daemon_threads = True
-    import threading
     asrv = None
     ast = acc_mod.settings(hub.gconfig())
     if ast:  # Cloudflare Access listener: always needs a JWT, independent of --remote and its token
@@ -1267,6 +1391,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if asrv:
             asrv.shutdown()
+        rm_stop_all()
         if ALL_MODE:
             try:
                 if (registry._read(dashfile, {}) or {}).get("pid") == os.getpid():

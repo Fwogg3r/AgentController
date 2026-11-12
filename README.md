@@ -73,7 +73,7 @@ or in Claude Code: `/api-request agent: implement the brief in briefs/task.md`.
 | claude-batch-toolkit | `/batchy` (Batch API, 50% off) | optional | `install.py` fetches it at a pinned commit (`--no-batchy` to skip) |
 | [aider](https://github.com/Aider-AI/aider) | `agentlocal` (local-model agents) | optional | `install.py --local`, pinned commit, Python 3.12 |
 | [LM Studio](https://lmstudio.ai) | models for `agentlocal`, the Models tab | optional | you install it and start its server (port 1234); `agentdoctor` finds it |
-| [pmjc](https://github.com/Fwogg3r/PersonalMCPJobController) | the Jobs tab, approvals, notifications | optional | you install it (its README); `agentdoctor` finds it and tells you how to make a `jobs`-scope token for `[pmjc] token_file` |
+| [pmjc](https://github.com/Fwogg3r/PersonalMCPJobController) | the Jobs tab, approvals, notifications | optional | you install it (its README); `agentdoctor` finds it and tells you how to make a `jobs`-scope token; put it in `<secrets_dir>/pmjc/agentdash.token` or point `[pmjc] token_file` at it |
 | `cloudflared` + Cloudflare Access | reaching the dashboard from the internet | optional | you set it up, see [Internet access](#internet-access-cloudflare-access) |
 | Windows Task Scheduler | the always-on dashboard (logon task) | optional (Windows) | `install.py` creates it (`--no-dash-task` to skip) |
 
@@ -149,7 +149,7 @@ terracotta accents; works in a narrow split-screen window). Spec: [docs/unified-
 - **Projects:** a list with live counts (working / waiting / crashed); discovered from the registry (`~/.agentcontroller`, filled by the CLIs), Claude Code transcript directories and `[dash] scan`. "All projects" merges them. Model checkboxes filter every list.
 - **Icons per agent kind** (`AGENT_PROFILES` in `index.html`): "Clawd", the orange pixel-art critter, for Claude (bobbing while it works, dozing while it waits, asleep when finished, "!" when crashed); an original Qwen critter for local Qwen; a chip for any other local model.
 - **Trees:** runs with a `parent` (`--parent`, `AGENTCONTROLLER_PARENT`, Claude plan subagents) nest under it; a parent collapses to "(n agents)".
-- **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (the project's `docs/roadmap`, with agents linked by `--roadmap ID`) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
+- **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (WebRoadmap's own interactive page for the project's `docs/roadmap`, editable with operate access; a button switches to a read-only summary with agents linked by `--roadmap ID`) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
 - **Local runs:** a context gauge (tokens of the last call vs the window, per-call history), a thinking pane apart from answer/edits/tests, stage progress, and approval buttons.
 - **Phone layout:** at <= 640px the page switches to a list view and a detail view (back button returns to the list), a bottom tab bar for Roadmap / Jobs / Models, a menu for spend and "+ New agent", and Filters in a bottom sheet. Desktop is unchanged.
 - **Attention queue:** the header badge lists what needs you: local approvals, pmjc approvals, crashes in the last 24 h, waiting Claude sessions.
@@ -165,7 +165,7 @@ scan = ["~/Documents/GitHub"]     # also list repos here that have an agentcontr
 hide = ["C:/some/repo"]
 [pmjc]
 url = "http://127.0.0.1:8770"
-token_file = "Z:/secrets/pmjc/agentdash.token"   # a pmjc API token with the `jobs` scope (`admin` only for approvals)
+# token_file = "..."              # default <secrets_dir>/pmjc/agentdash.token: a pmjc API token with the `jobs` scope (`admin` only for approvals)
 [lmstudio.hosts]
 local = "http://127.0.0.1:1234"
 ```

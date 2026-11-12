@@ -198,6 +198,8 @@ dialog .msg { white-space:pre-wrap; margin:6px 0; }
 .ev pre { margin:2px 0 2px 2ch; text-indent:0; color:var(--muted); white-space:pre-wrap; }
 /* roadmap, jobs, models */
 .rm { display:flex; gap:12px; align-items:flex-start; overflow:auto; min-height:100%; }
+#rm-body.real { padding:0; overflow:hidden; }
+#rm-body.real iframe { display:block; width:100%; height:100%; border:0; background:var(--bg, #fff); }
 .rmcol { flex:none; width:290px; display:flex; flex-direction:column; gap:8px; }
 .rmcol h3 { margin:0; font-size:13px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 10px; cursor:pointer; display:flex; flex-direction:column; gap:4px; }
@@ -452,7 +454,7 @@ body.lv-view .need-operate, body.lv-view .need-admin, body.lv-operate .need-admi
       </details>
     </div>
     <div class="view" id="v-roadmap" hidden>
-      <div class="vhead"><select id="psel" aria-label="Project"></select><button id="rm-refresh">refresh</button><span id="rm-msg"></span></div>
+      <div class="vhead"><select id="psel" aria-label="Project"></select><button id="rm-mode" title="Switch between WebRoadmap's own (editable) page and the dashboard's summary with agent links">summary view</button><button id="rm-refresh">refresh</button><span id="rm-msg"></span></div>
       <div class="vbody" id="rm-body"></div>
     </div>
     <div class="view" id="v-jobs" hidden>
@@ -775,8 +777,13 @@ async function loadJobs() {
   jobs = d || { ok: false, error: "the dashboard server did not answer /api/jobs" };
   if (tab === "jobs") drawJobs();
 }
+// Roadmap tab mode: "real" = WebRoadmap's own page (proxied at /rmui/), "summary" = the dashboard's read-only cards.
+let rmMode = (() => { try { return localStorage.getItem("ac-rm-mode") || "real"; } catch (_) { return "real"; } })();
 async function loadRoadmap(fresh) {
   $("#rm-msg").textContent = "loading…";
+  $("#rm-mode").textContent = rmMode === "real" ? "summary view" : "roadmap view";
+  if (rmMode === "real") return drawRoadmapReal(fresh === true);
+  $("#rm-body").classList.remove("real");
   if (sel === ALL) { roadmapData = null; drawRoadmap(); return; }
   const want = sel, d = await jget("/api/roadmap", { p: sel, refresh: fresh === true ? 1 : null });
   if (want !== sel) return;
@@ -1348,6 +1355,24 @@ function drawRoadmap() {
   if (!(d.phases || []).length) wrap.append(el("div", "empty", "The roadmap has no phases yet."));
   box.append(wrap);
 }
+function drawRoadmapReal(fresh) {
+  const box = $("#rm-body"), msg = $("#rm-msg");
+  box.classList.add("real");
+  if (sel === ALL) { box.classList.remove("real"); box.textContent = ""; msg.textContent = ""; box.append(el("div", "empty", "Pick a project in the list to see its roadmap.")); return; }
+  const src = "/rmui/?p=" + encodeURIComponent(sel), f = box.querySelector("iframe");
+  if (f && f.dataset.p === sel && !fresh) { msg.textContent = "WebRoadmap · edits save to docs/roadmap"; return; }
+  box.textContent = "";
+  const fr = document.createElement("iframe");
+  fr.dataset.p = sel; fr.src = src; fr.title = "Roadmap";
+  box.append(fr);
+  msg.textContent = "WebRoadmap · edits save to docs/roadmap";
+}
+$("#rm-mode").onclick = () => {
+  rmMode = rmMode === "real" ? "summary" : "real";
+  try { localStorage.setItem("ac-rm-mode", rmMode); } catch (_) {}
+  $("#rm-body").textContent = "";
+  loadRoadmap();
+};
 $("#rm-refresh").onclick = () => loadRoadmap(true);
 
 // ---- jobs tab ----

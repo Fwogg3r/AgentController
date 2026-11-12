@@ -35,6 +35,8 @@ ENDPOINTS: dict[tuple[str, str], str] = {
 
 
 def required_level(method: str, path: str) -> str:
+    if path == "/rmui" or path.startswith("/rmui/"):  # WebRoadmap's own page: viewing is view, editing is operate
+        return "view" if method == "GET" else "operate"
     return ENDPOINTS.get((method, path), "admin")
 
 

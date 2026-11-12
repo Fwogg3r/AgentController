@@ -10,13 +10,15 @@ Sources (all read-only here):
 Global config, all keys optional:
 
     include = "Z:/shared/agentcontroller/dash.toml"   # merged first; this file's keys win
+    secrets_dir = "D:/secrets"          # this machine's secrets folder; pmjc's token defaults to <it>/pmjc/agentdash.token
     [dash]
     port = 8765
     scan = ["~/Documents/GitHub"]       # also list repos here that have an agentcontroller.toml
     hide = ["C:/some/repo"]             # never list these projects
     [pmjc]
     url = "http://127.0.0.1:8770"
-    token_file = "Z:/secrets/pmjc/agentdash.token"   # a pmjc API token with the jobs (+ admin for approvals) scope
+    token_file = "D:/secrets/pmjc/agentdash.token"   # default <secrets_dir>/pmjc/agentdash.token; a pmjc API token
+                                                     # with the jobs (+ admin for approvals) scope
     [lmstudio.hosts]
     local = "http://127.0.0.1:1234"
     [dash.access]                       # Cloudflare Access sign-in on a second listener (access.py)
@@ -82,6 +84,23 @@ def gconfig() -> dict:
 
 def _path(v: str) -> Path:
     return Path(os.path.expandvars(v)).expanduser()
+
+
+def secrets_dir(cfg: dict | None = None) -> Path | None:
+    """This machine's shared secrets folder: `secrets_dir` in the global config (keep it out of the shared include:
+    it differs per machine). Unset means no default; nothing is assumed about drive letters."""
+    v = (gconfig() if cfg is None else cfg).get("secrets_dir")
+    return _path(str(v)) if v else None
+
+
+def pmjc_token_file(cfg: dict | None = None) -> Path | None:
+    """[pmjc] token_file when set, else <secrets_dir>/pmjc/agentdash.token, else None."""
+    cfg = gconfig() if cfg is None else cfg
+    c = cfg.get("pmjc", {})
+    if c.get("token_file"):
+        return _path(str(c["token_file"]))
+    sd = secrets_dir(cfg)
+    return sd / "pmjc" / "agentdash.token" if sd else None
 
 
 # ---------- Claude Code session dirs -> projects ----------
@@ -528,15 +547,19 @@ def pmjc() -> dict:
     c = gconfig().get("pmjc", {})
     url = (c.get("url") or "http://127.0.0.1:8770").rstrip("/")
     token = None
-    if c.get("token_file"):
+    tf = pmjc_token_file()
+    if tf:
         try:
-            token = _path(c["token_file"]).read_text(encoding="utf-8").strip()
+            token = tf.read_text(encoding="utf-8").strip()
         except OSError:
             pass
     out: dict = {"url": url, "configured": bool(token), "ok": False}
     if not token:
+        where = (f"put it in {tf}" if tf else
+                 "set secrets_dir (the token is then read from <secrets_dir>/pmjc/agentdash.token) "
+                 "or [pmjc] token_file in ~/.agentcontroller/config.toml")
         out["error"] = ("no pmjc token: create one in pmjc's dashboard (Tokens: scopes jobs, plus admin to list "
-                        "approvals) and set [pmjc] token_file in ~/.agentcontroller/config.toml")
+                        f"approvals) and {where}")
     else:
         for key, path in (("jobs", "/api/jobs"), ("watches", "/api/watches?all=true"), ("approvals", "/api/approvals"),
                           ("runs", "/api/runs")):

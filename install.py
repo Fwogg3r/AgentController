@@ -293,6 +293,7 @@ def install_statusline(claude: Path, script: str, key: str) -> None:
 
 GLOBAL_CONFIG = """# AgentController global config (read by agentdash --all). Everything is optional.
 # include = "Z:/shared/agentcontroller/dash.toml"   # merged first; the keys below win
+# secrets_dir = "D:/secrets"        # this machine's secrets folder; pmjc's token is read from <it>/pmjc/agentdash.token
 [dash]
 # port = 8765
 # host = "0.0.0.0"                  # LAN viewing: bind all interfaces (needs remote = true)
@@ -301,7 +302,7 @@ GLOBAL_CONFIG = """# AgentController global config (read by agentdash --all). Ev
 # hide = ["C:/some/repo"]           # never list these projects
 # [pmjc]
 # url = "http://127.0.0.1:8770"
-# token_file = "Z:/secrets/pmjc/agentdash.token"
+# token_file = "..."                # only to override <secrets_dir>/pmjc/agentdash.token
 # [lmstudio.hosts]
 # local = "http://127.0.0.1:1234"
 # [dash.access]       # Cloudflare Access sign-in on a second listener for a tunnel (see README "Internet access")

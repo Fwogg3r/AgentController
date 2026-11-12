@@ -437,14 +437,15 @@ def service_checks(cfg: dict, found: list[Service]) -> list[Check]:
         out.append(Check("lmstudio", "LM Studio", "optional", "missing", f"not answering at {hosts}",
                          "only for local models: start LM Studio's server (Developer tab) or add a host with `agentdoctor --scan`"))
     pm = [s for s in found if s.kind == "pmjc"]
-    token_file = cfg.get("pmjc", {}).get("token_file")
+    from .hub import pmjc_token_file
+    token_file = pmjc_token_file(cfg)
     if pm:
         detail = "; ".join(f"{s.url} ({s.detail})" for s in pm)
         if not token_file:
-            out.append(Check("pmjc", "pmjc (PersonalMCPJobController)", "optional", "warn", detail + "; no token_file configured",
-                             PMJC_TOKEN_HINT))
-        elif not Path(os.path.expandvars(token_file)).expanduser().is_file():
-            out.append(Check("pmjc", "pmjc (PersonalMCPJobController)", "optional", "warn", detail + f"; token_file {token_file} does not exist",
+            out.append(Check("pmjc", "pmjc (PersonalMCPJobController)", "optional", "warn",
+                             detail + "; no token_file or secrets_dir configured", PMJC_TOKEN_HINT))
+        elif not token_file.is_file():
+            out.append(Check("pmjc", "pmjc (PersonalMCPJobController)", "optional", "warn", detail + f"; token file {token_file} does not exist",
                              PMJC_TOKEN_HINT))
         else:
             out.append(Check("pmjc", "pmjc (PersonalMCPJobController)", "optional", "ok", detail + "; token file set"))
@@ -456,9 +457,9 @@ def service_checks(cfg: dict, found: list[Service]) -> list[Check]:
 
 
 PMJC_TOKEN_HINT = ("create a token with the `jobs` scope (add `admin` only if you want pmjc approvals in the dashboard): "
-                   "`pmjc token create agentdash --scopes jobs` or the Tokens tab of pmjc's dashboard; save it to a file "
-                   "outside any repo (for example ~/.agentcontroller/pmjc.token) and set `token_file` under [pmjc] in "
-                   "~/.agentcontroller/config.toml")
+                   "`pmjc token create agentdash --scopes jobs` or the Tokens tab of pmjc's dashboard; save it as "
+                   "<secrets_dir>/pmjc/agentdash.token (set `secrets_dir` at the top of ~/.agentcontroller/config.toml), "
+                   "or anywhere outside a repo with `token_file` under [pmjc]")
 
 
 # ---------- config merge (targeted text edits; comments and other keys survive) ----------
@@ -511,7 +512,7 @@ def merge_services(path: Path, lm_hosts: dict[str, str] | None = None, pmjc_url:
                 raise ValueError("[pmjc] is defined in a form agentdoctor does not edit; add the url by hand")
         else:
             lines += ["", "[pmjc]", *entry,
-                      "# token_file = \"~/.agentcontroller/pmjc.token\"   # a pmjc token with the `jobs` scope, kept outside any repo"]
+                      "# token_file = \"...\"   # default <secrets_dir>/pmjc/agentdash.token: a pmjc token with the `jobs` scope"]
         done.append(f"pmjc url = {pmjc_url}")
 
     if not done:
@@ -653,8 +654,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not quiet and not sys.stdin.isatty():
             print("(not writing without -y; rerun `agentdoctor -y` to add them)")
     if any(s.kind == "pmjc" for s in rep.services) and not quiet:
-        pm_cfg = load_config().get("pmjc", {})
-        if not pm_cfg.get("token_file"):
+        from .hub import pmjc_token_file
+        tf = pmjc_token_file(load_config())
+        if not tf or not tf.is_file():
             print("\npmjc needs a token for the dashboard: " + PMJC_TOKEN_HINT)
 
     if quiet:
