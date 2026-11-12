@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import subprocess
+
+from .. import NO_WINDOW
 from pathlib import Path
 
 from .config import Model
@@ -17,7 +19,7 @@ def file_tokens(root: Path, rel: str, m: Model) -> int:
 
 
 def repo_files(root: Path) -> list[str]:
-    out = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True, **NO_WINDOW).stdout
     return [f for f in out.splitlines() if f and not f.startswith(".") and (root / f).stat().st_size < 400_000]
 
 

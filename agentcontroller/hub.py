@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import claude_sessions, registry
+from . import NO_WINDOW, claude_sessions, registry
 
 CLAUDE_BASE = Path.home() / ".claude" / "projects"
 _lock = threading.Lock()
@@ -230,7 +230,8 @@ def _pid_alive(pid) -> bool:
     except (TypeError, ValueError):
         return False
     if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True,
+                             **NO_WINDOW).stdout
         return str(pid) in out.split()
     try:
         os.kill(pid, 0)
@@ -478,7 +479,7 @@ def roadmap(path: str) -> dict:
         return {"ok": False, "error": "the `roadmap` CLI isn't installed: uv tool install git+https://github.com/Fwogg3r/WebRoadmap"}
     try:
         p = subprocess.run([exe, "--dir", str(rdir), "--json", "list"], capture_output=True, text=True,
-                           encoding="utf-8", timeout=20)
+                           encoding="utf-8", timeout=20, **NO_WINDOW)
         data = json.loads(p.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         return {"ok": False, "error": f"roadmap list failed: {e}"}
