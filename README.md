@@ -65,7 +65,7 @@ or in Claude Code: `/api-request agent: implement the brief in briefs/task.md`.
 |---|---|---|---|
 | [uv](https://docs.astral.sh/uv/) | installing and running everything | **required** | you install it; `install.py` stops with the link if missing |
 | git | worktrees, branches, the dashboard's git info | **required** | you install it |
-| This package (`agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor`) | everything | **required** | `install.py` (`uv tool install --editable`) |
+| This package (`agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor agentupdate`) | everything | **required** | `install.py` (`uv tool install --editable`) |
 | `claude-agent-sdk`, `anthropic` | API agents, one-shot calls | **required** | dependencies of the package; the SDK bundles the Claude Code binary it drives |
 | [`roadmap` CLI](https://github.com/Fwogg3r/WebRoadmap) (WebRoadmap) | the dashboard's Roadmap tab, project roadmaps | **required** for those | `install.py` asks, then installs WebRoadmap's latest main; agentdash and `install.py` keep it there (`--no-roadmap` to skip) |
 | Anthropic API key | `agentctl`, `agentask`, `/batchy` | recommended | `install.py --init PROJECT` (stored in the project's gitignored `.agentcontroller/api.key`, never in a global `ANTHROPIC_API_KEY`) |
@@ -85,7 +85,7 @@ Restart Claude Code afterwards so it picks up the skills and the MCP server. The
 
 | What | Where |
 |---|---|
-| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
+| The commands `agentctl agentdash agentask agentwatch agentwait agentusage agentpilot agentlocal agentdoctor agentupdate` | `uv tool install --editable` of this checkout, so `git pull` upgrades them |
 | The `roadmap` CLI and its Claude skill (asks first); with `--local` also aider | `uv tool install` from GitHub: WebRoadmap at its latest main (upgraded on every run), aider at a pinned commit; skill in `~/.claude/skills/roadmap/` |
 | **`/api-request`** skill: one-shot asks and design debates with another model, background API agents, dashboard, spend | `~/.claude/skills/api-request/` (`SKILL.md` + `ask_api.py`) |
 | **`/batchy`** skill + `claude-batch` MCP server: non-urgent work through the Message Batches API at 50% off | Fetched from [s2-streamstore/claude-batch-toolkit](https://github.com/s2-streamstore/claude-batch-toolkit) at a pinned commit into `~/.claude/skills/batchy/` and `~/.claude/mcp/`, registered in `~/.claude.json` |
@@ -152,6 +152,7 @@ terracotta accents; works in a narrow split-screen window). Spec: [docs/unified-
 - **Tabs:** *Agents* (transcripts, steering) | *Roadmap* (WebRoadmap's own interactive page for the project's `docs/roadmap`, editable with operate access; a button switches to a read-only summary with agents linked by `--roadmap ID`; agentdash upgrades the `roadmap` CLI to WebRoadmap's latest main at startup and when this page is loaded) | *Jobs* (pmjc jobs, watches, approvals) | *Models* (LM Studio per host).
 - **Local runs:** a context gauge (tokens of the last call vs the window, per-call history), a thinking pane apart from answer/edits/tests, stage progress, and approval buttons.
 - **Phone layout:** at <= 640px the page switches to a list view and a detail view (back button returns to the list), a bottom tab bar for Roadmap / Jobs / Models, a menu for spend and "+ New agent", and Filters in a bottom sheet. Desktop is unchanged.
+- **Auto-update (pmjc, WebRoadmap):** every 5 min agentdash checks both repos' `main` on GitHub; when it moved, it reinstalls the `roadmap` uv tool, or fast-forwards pmjc's checkout (only on a clean `main`), runs `uv sync` if dependencies changed and restarts `pmjc serve` (pmjc's supervisor brings it back). `agentupdate` runs the same check now; `agentupdate --status` shows the last results. Config: `[autoupdate] interval` (0 = off), `services`, `[autoupdate.pmjc] checkout`.
 - **Attention queue:** the header badge lists what needs you: local approvals, pmjc approvals, crashes in the last 24 h, waiting Claude sessions, questions from API agents.
 - **Global config** `~/.agentcontroller/config.toml` (all keys optional):
 

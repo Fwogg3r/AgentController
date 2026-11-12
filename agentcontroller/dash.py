@@ -39,7 +39,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import access as acc_mod
-from . import NO_WINDOW, claude_sessions, hub, registry, roadmap_tool
+from . import NO_WINDOW, autoupdate, claude_sessions, hub, registry, roadmap_tool
 from . import resume as resume_mod
 from .config import CONFIG_NAME, Config, load
 
@@ -1420,6 +1420,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(hub.pmjc())
         if u.path == "/api/lmstudio":
             return self._json(hub.lmstudio())
+        if u.path == "/api/autoupdate":
+            return self._json(autoupdate.load_state())
         if u.path == "/api/attention":
             return self._json(attention())
         if u.path == "/api/runs":
@@ -1756,6 +1758,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"WARNING: Access listener not started: {e}", flush=True)
     threading.Thread(target=lambda: (projects_map(), hub.claude_dirs()), daemon=True).start()  # warm the caches
     threading.Thread(target=rm_refresh, args=(True,), daemon=True).start()  # roadmap CLI at WebRoadmap main
+    if ALL_MODE:  # follow pmjc's and WebRoadmap's main: update and re-serve them when it moves (autoupdate.py)
+        threading.Thread(target=autoupdate.loop, kwargs={"log": lambda m: print(m, flush=True),
+                         "roadmap_refresh": lambda: rm_refresh(True), "first_delay": 60}, daemon=True).start()
     if reload_enabled():
         def close():
             for s_ in (srv, asrv):
